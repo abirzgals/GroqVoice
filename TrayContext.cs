@@ -21,7 +21,6 @@ public sealed class TrayContext : ApplicationContext
 
     private CancellationTokenSource? _busyCts;
     private volatile bool _busy;
-    private int _deviceIndex = -1;
 
     public TrayContext(Config cfg)
     {
@@ -41,7 +40,7 @@ public sealed class TrayContext : ApplicationContext
             ContextMenuStrip = BuildMenu(),
         };
 
-        _deviceIndex = Recorder.ResolveDevice(_cfg.InputDeviceContains);
+        Recorder.LogDevices(_cfg.InputDeviceContains);
 
         Vocabulary.EnsureFileExists();
         var (_, vocabCount) = Vocabulary.LoadPrompt();
@@ -155,14 +154,11 @@ public sealed class TrayContext : ApplicationContext
         parent.DropDownItems.Add(def);
         parent.DropDownItems.Add(new ToolStripSeparator());
 
-        int count = NAudio.Wave.WaveInEvent.DeviceCount;
-        for (int i = 0; i < count; i++)
+        var names = Recorder.ListDeviceNames();
+        for (int i = 0; i < names.Count; i++)
         {
-            string name;
-            try { name = NAudio.Wave.WaveInEvent.GetCapabilities(i).ProductName; }
-            catch { continue; }
-
-            var item = new ToolStripMenuItem($"[{i}] {name}")
+            var name = names[i];
+            var item = new ToolStripMenuItem(name)
             {
                 Checked = !string.IsNullOrWhiteSpace(_cfg.InputDeviceContains)
                     && name.Contains(_cfg.InputDeviceContains, StringComparison.OrdinalIgnoreCase),
@@ -177,8 +173,7 @@ public sealed class TrayContext : ApplicationContext
     {
         _cfg.InputDeviceContains = nameContains;
         _cfg.Save();
-        _deviceIndex = Recorder.ResolveDevice(nameContains);
-        Log.Info($"mic switched via tray: '{(string.IsNullOrEmpty(nameContains) ? "(default)" : nameContains)}' → device index {_deviceIndex}");
+        Log.Info($"mic switched via tray: '{(string.IsNullOrEmpty(nameContains) ? "(default)" : nameContains)}'");
         ShowBalloon("Microphone changed",
             string.IsNullOrEmpty(nameContains) ? "Now using system default input." : $"Now using: {nameContains}",
             ToolTipIcon.Info);
@@ -189,7 +184,7 @@ public sealed class TrayContext : ApplicationContext
         if (_busy) { Log.Info("chord pressed but busy, ignoring"); return; }
         try
         {
-            _rec.Start(_deviceIndex);
+            _rec.Start(_cfg.InputDeviceContains);
             Log.Info("recording started");
             _ui.Post(_ => { _tray.Icon = _recIcon; _tray.Text = "GroqVoice — recording…"; }, null);
             if (_cfg.PlayFeedbackSounds) Click.High();
