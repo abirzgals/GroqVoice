@@ -5,9 +5,22 @@ Hold **Win+Ctrl**, speak, release — your speech gets transcribed (Whisper) and
 
 Russian + English mixed dictation works out of the box.
 
-![status: tray app](https://img.shields.io/badge/runs%20in-system%20tray-blue)
-![framework: .NET 8](https://img.shields.io/badge/.NET-8.0-512bd4)
-![lang: C%23](https://img.shields.io/badge/C%23-WinForms-239120)
+[![Download .exe](https://img.shields.io/badge/Download-GroqVoice--fd.exe%20(720%20KB)-brightgreen?style=for-the-badge&logo=windows)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)
+[![Self-contained](https://img.shields.io/badge/Self--contained-GroqVoice--sc.exe%20(70%20MB)-blue?style=for-the-badge&logo=windows)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)
+[![Releases](https://img.shields.io/badge/All-Releases-lightgrey?style=for-the-badge&logo=github)](https://github.com/abirzgals/GroqVoice/releases)
+
+![framework: .NET 8](https://img.shields.io/badge/.NET-8.0-512bd4) ![lang: C%23](https://img.shields.io/badge/C%23-WinForms-239120) ![runs in: system tray](https://img.shields.io/badge/runs%20in-system%20tray-blue)
+
+## ⬇ Download
+
+| Build | Size | Requires | Direct link |
+|---|---|---|---|
+| **Recommended** | ~720 KB | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (one-time install) | **[GroqVoice-fd.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)** |
+| Self-contained | ~70 MB | nothing — bundles .NET runtime | **[GroqVoice-sc.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)** |
+
+These links always point to the latest release. Browse all versions on the [Releases page](https://github.com/abirzgals/GroqVoice/releases).
+
+> **Windows SmartScreen** may warn that the .exe is from an unidentified publisher (the binary isn't code-signed). Click **More info → Run anyway** — or right-click → Properties → tick **Unblock** before launching.
 
 ---
 
