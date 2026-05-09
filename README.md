@@ -67,10 +67,13 @@ cd GroqVoice
 
 | Действие | Что делает |
 |---|---|
-| Hold **Win+Ctrl**, speak, release | STT → paste транскрипта в активное окно |
+| **Hold Win+Ctrl**, speak, release | Push-to-talk: STT → paste транскрипта в активное окно |
+| **Double-tap Win+Ctrl** (быстро два раза) | Toggle: запись стартует и держится. Любой следующий tap её останавливает. |
 | Begin with `task: …` / `задача: …` | LLM-ответ → paste в активное окно |
 | **Win+Ctrl + любая клавиша** | OS shortcut работает обычно (Win+Ctrl+D, Win+Ctrl+→ и т.д.); запись отбрасывается |
-| Right-click tray | Open config, Open vocabulary, Open log, Microphone picker, Start with Windows, Quit |
+| Right-click tray | Setup, Open config / vocabulary / log, Microphone picker, Start with Windows, Quit |
+
+**Hotkey-режимы.** Удерживание = push-to-talk (для коротких реплик, как сейчас). Быстрый двойной тап Win+Ctrl = lock-on: можно отпустить клавиши и говорить хоть минуту, любой одиночный нажим клавишь Win+Ctrl завершает. Граница между «тап» и «hold» — 250 мс (`pttHoldMs`); окно второго тапа — 400 мс (`doubleTapWindowMs`).
 
 ### Примеры task-команд
 

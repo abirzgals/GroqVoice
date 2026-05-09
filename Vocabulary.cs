@@ -29,12 +29,11 @@ public static class Vocabulary
             "# Lines starting with '#' are ignored. Hot-reloads — no restart needed.\n" +
             "#\n" +
             "# Examples:\n" +
-            "# Resonance\n" +
-            "# WhiteBIT\n" +
-            "# FlashBot\n" +
             "# OAuth\n" +
             "# gRPC\n" +
-            "# Postgres\n");
+            "# Postgres\n" +
+            "# Kubernetes\n" +
+            "# WebSocket\n");
     }
 
     /// <summary>Returns the prompt string and the number of vocabulary entries used.</summary>

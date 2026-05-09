@@ -37,6 +37,12 @@ public sealed class Config
     // peak amplitude (% of full scale) below which a recording is treated as silent and dropped
     [JsonPropertyName("silencePeakPercent")] public double SilencePeakPercent { get; set; } = 1.0;
 
+    // chord held longer than this is treated as push-to-talk; shorter is a "tap"
+    [JsonPropertyName("pttHoldMs")] public int PttHoldMs { get; set; } = 250;
+
+    // a second tap arriving within this window after a quick first tap = double-tap toggle
+    [JsonPropertyName("doubleTapWindowMs")] public int DoubleTapWindowMs { get; set; } = 400;
+
     public static string Dir => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GroqVoice");

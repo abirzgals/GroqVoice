@@ -11,5 +11,7 @@
   "inputDeviceContains": "",
   "saveLastWav": true,
   "minRecordingSeconds": 1.0,
-  "silencePeakPercent": 1.0
+  "silencePeakPercent": 1.0,
+  "pttHoldMs": 250,
+  "doubleTapWindowMs": 400
 }

@@ -4,13 +4,31 @@ using System.Runtime.InteropServices;
 namespace GroqVoice;
 
 /// <summary>
-/// Low-level keyboard hook detecting "hold both Win and Ctrl" as a chord.
-/// While the chord is held with no other key, raises ChordPressed once and
-/// ChordReleased when either side is released. Events bubble through normally
-/// — we never swallow keys, so OS shortcuts (Win+Ctrl+D, etc.) still work.
+/// Detects "Win+Ctrl held together" as a chord and exposes two modes:
+///
+///   • Press &amp; hold  →  push-to-talk: ChordPressed fires immediately,
+///                       ChordReleased fires when either modifier is released.
+///
+///   • Quick double-tap (press-release-press within <see cref="DoubleTapWindowMs"/> ms)
+///                    →  toggle: recording starts and stays on regardless of key state.
+///                       The next single press fires ChordReleased to stop it.
+///
+/// "Quick" means the chord was held for less than <see cref="PttHoldMs"/> ms.
+/// Anything longer is treated as a normal PTT release and fires ChordReleased
+/// immediately. Keys are never swallowed, so OS shortcuts (Win+Ctrl+D etc.) work
+/// — when a third key is detected during the chord the release is reported as
+/// dirty and the caller discards the audio.
 /// </summary>
 public sealed class Hotkey : IDisposable
 {
+    public int PttHoldMs { get; set; } = 250;
+    public int DoubleTapWindowMs { get; set; } = 400;
+
+    public event Action? ChordPressed;
+    /// <summary>clean=false means a third key was pressed during the chord.</summary>
+    public event Action<bool>? ChordReleased;
+
+    // ---- low-level hook plumbing ----
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
     private const int WM_KEYUP = 0x0101;
@@ -36,29 +54,32 @@ public sealed class Hotkey : IDisposable
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
     [DllImport("user32.dll")]
     private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
 
     private readonly LowLevelKeyboardProc _proc;
     private IntPtr _hookId = IntPtr.Zero;
 
+    // chord-detection (low-level)
     private bool _winHeld;
     private bool _ctrlHeld;
     private bool _chordActive;
     private bool _otherKeyDuringChord;
 
-    public event Action? ChordPressed;
-    /// <summary>Fires when either modifier is released. clean=false means a third key was pressed
-    /// during the chord (e.g. Win+Ctrl+D) — caller should discard, not act.</summary>
-    public event Action<bool>? ChordReleased;
+    // state machine (high-level: PTT vs toggle)
+    private enum Mode { Idle, Toggle }
+    private readonly object _smLock = new();
+    private Mode _mode = Mode.Idle;
+    private bool _recordingActive;
+    private DateTime _pressTimeUtc;
+    private bool _waitingForSecondTap;
+    private bool _firstTapClean;
+    private System.Threading.Timer? _doubleTapTimer;
 
     public Hotkey()
     {
@@ -89,14 +110,11 @@ public sealed class Hotkey : IDisposable
             else if (isCtrl) _ctrlHeld = true;
             else if (_chordActive) _otherKeyDuringChord = true;
 
-            // Chord fires the instant both modifiers are held — even if the second-down
-            // is the modifier itself. Auto-repeats just re-enter this branch with _chordActive
-            // already true, so ChordPressed only fires once.
             if (!_chordActive && _winHeld && _ctrlHeld)
             {
                 _chordActive = true;
                 _otherKeyDuringChord = false;
-                try { ChordPressed?.Invoke(); } catch { /* never let user code break the hook */ }
+                OnLowChordDown();
             }
         }
         else if (isUp)
@@ -109,11 +127,103 @@ public sealed class Hotkey : IDisposable
                 _chordActive = false;
                 bool clean = !_otherKeyDuringChord;
                 _otherKeyDuringChord = false;
-                try { ChordReleased?.Invoke(clean); } catch { }
+                OnLowChordUp(clean);
             }
         }
 
         return CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    // ===== state machine =====
+
+    private void OnLowChordDown()
+    {
+        bool firePressed = false;
+        bool fireReleased = false;
+        bool releaseClean = true;
+
+        lock (_smLock)
+        {
+            if (_mode == Mode.Toggle)
+            {
+                // Already toggled-on → this press is the "stop" tap.
+                _mode = Mode.Idle;
+                _recordingActive = false;
+                fireReleased = true;
+            }
+            else if (_waitingForSecondTap)
+            {
+                // Second half of a quick double-tap → enter toggle mode.
+                _waitingForSecondTap = false;
+                CancelDoubleTapTimerLocked();
+                _mode = Mode.Toggle;
+                // Recording is already on (started by first press of the double-tap); keep it.
+            }
+            else
+            {
+                // Fresh press → start recording optimistically.
+                _pressTimeUtc = DateTime.UtcNow;
+                _recordingActive = true;
+                firePressed = true;
+            }
+        }
+
+        if (firePressed) try { ChordPressed?.Invoke(); } catch { }
+        if (fireReleased) try { ChordReleased?.Invoke(releaseClean); } catch { }
+    }
+
+    private void OnLowChordUp(bool clean)
+    {
+        bool fireReleased = false;
+        bool releaseClean = clean;
+
+        lock (_smLock)
+        {
+            if (_mode == Mode.Toggle) return;       // releases are no-ops while toggled on
+            if (!_recordingActive) return;          // we never started
+
+            var heldMs = (DateTime.UtcNow - _pressTimeUtc).TotalMilliseconds;
+            if (clean && heldMs < PttHoldMs)
+            {
+                // Possibly the first half of a double-tap. Wait briefly to see.
+                _waitingForSecondTap = true;
+                _firstTapClean = clean;
+                CancelDoubleTapTimerLocked();
+                _doubleTapTimer = new System.Threading.Timer(OnDoubleTapTimeout, null,
+                    DoubleTapWindowMs, System.Threading.Timeout.Infinite);
+            }
+            else
+            {
+                _recordingActive = false;
+                fireReleased = true;
+            }
+        }
+
+        if (fireReleased) try { ChordReleased?.Invoke(releaseClean); } catch { }
+    }
+
+    private void OnDoubleTapTimeout(object? state)
+    {
+        bool fire = false;
+        bool clean = true;
+
+        lock (_smLock)
+        {
+            if (!_waitingForSecondTap) return;
+            _waitingForSecondTap = false;
+            CancelDoubleTapTimerLocked();
+            _recordingActive = false;
+            clean = _firstTapClean;
+            fire = true;
+        }
+
+        if (fire) try { ChordReleased?.Invoke(clean); } catch { }
+    }
+
+    private void CancelDoubleTapTimerLocked()
+    {
+        _doubleTapTimer?.Dispose();
+        _doubleTapTimer = null;
     }
 
     public void Dispose()
@@ -123,5 +233,6 @@ public sealed class Hotkey : IDisposable
             UnhookWindowsHookEx(_hookId);
             _hookId = IntPtr.Zero;
         }
+        lock (_smLock) CancelDoubleTapTimerLocked();
     }
 }

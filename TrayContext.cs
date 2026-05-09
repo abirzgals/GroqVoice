@@ -47,7 +47,11 @@ public sealed class TrayContext : ApplicationContext
         var (_, vocabCount) = Vocabulary.LoadPrompt();
         Log.Info($"vocabulary: {vocabCount} terms loaded from {Vocabulary.Path}");
 
-        _hotkey = new Hotkey();
+        _hotkey = new Hotkey
+        {
+            PttHoldMs = Math.Max(50, _cfg.PttHoldMs),
+            DoubleTapWindowMs = Math.Max(150, _cfg.DoubleTapWindowMs),
+        };
         _hotkey.ChordPressed  += OnChordPressed;
         _hotkey.ChordReleased += OnChordReleased;
 
