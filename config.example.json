@@ -1,0 +1,15 @@
+{
+  "groqApiKey": "",
+  "transcriptionModel": "whisper-large-v3",
+  "chatModel": "llama-3.3-70b-versatile",
+  "language": "",
+  "taskKeywords": ["task", "задача", "задание"],
+  "taskKeywordMaxWordPosition": 4,
+  "autostart": true,
+  "playFeedbackSounds": true,
+  "taskSystemPrompt": "",
+  "inputDeviceContains": "",
+  "saveLastWav": true,
+  "minRecordingSeconds": 1.0,
+  "silencePeakPercent": 1.0
+}

@@ -1,0 +1,15 @@
+bin/
+obj/
+publish/
+publish-fd/
+publish-sc/
+*.user
+.vs/
+
+# local secrets / runtime data — must never end up in the repo
+config.json
+*.local.json
+last.wav
+log.txt
+log.*.txt
+vocabulary.txt
