@@ -188,7 +188,7 @@ public sealed class TrayContext : ApplicationContext
             _rec.Start(_deviceIndex);
             Log.Info("recording started");
             _ui.Post(_ => { _tray.Icon = _recIcon; _tray.Text = "GroqVoice — recording…"; }, null);
-            if (_cfg.PlayFeedbackSounds) SystemSounds.Asterisk.Play();
+            if (_cfg.PlayFeedbackSounds) Click.High();
         }
         catch (Exception ex)
         {
@@ -288,7 +288,7 @@ public sealed class TrayContext : ApplicationContext
                 if (!string.IsNullOrEmpty(output))
                     _ui.Post(_ => Paster.Paste(output), null);
 
-                if (_cfg.PlayFeedbackSounds) SystemSounds.Beep.Play();
+                if (_cfg.PlayFeedbackSounds) Click.Low();
             }
             catch (Exception ex)
             {
