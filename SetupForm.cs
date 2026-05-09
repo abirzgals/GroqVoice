@@ -15,6 +15,7 @@ public sealed class SetupForm : Form
     private readonly Config _cfg;
     private readonly TextBox _txtKey;
     private readonly CheckBox _chkShow;
+    private readonly CheckBox _chkAutostart;
     private readonly Button _btnSave;
     private readonly Label _lblStatus;
 
@@ -110,6 +111,15 @@ public sealed class SetupForm : Form
         _chkShow.CheckedChanged += (_, _) => _txtKey.UseSystemPasswordChar = !_chkShow.Checked;
         Controls.Add(_chkShow);
 
+        _chkAutostart = new CheckBox
+        {
+            Text = "Start with Windows",
+            Location = new Point(160, 348),
+            AutoSize = true,
+            Checked = _cfg.Autostart,
+        };
+        Controls.Add(_chkAutostart);
+
         _lblStatus = new Label
         {
             Location = new Point(20, 376),
@@ -160,10 +170,18 @@ public sealed class SetupForm : Form
         if (!key.StartsWith("gsk_", StringComparison.Ordinal) || key.Length < 20) return;
 
         _cfg.GroqApiKey = key;
+        _cfg.Autostart = _chkAutostart.Checked;
         try
         {
             _cfg.Save();
-            Log.Info("API key saved via SetupForm");
+            try
+            {
+                if (_cfg.Autostart) Autostart.Enable(System.Windows.Forms.Application.ExecutablePath);
+                else Autostart.Disable();
+            }
+            catch (Exception ex) { Log.Warn($"autostart toggle from SetupForm failed: {ex.Message}"); }
+
+            Log.Info($"API key saved via SetupForm; autostart={_cfg.Autostart}");
             Saved = true;
             DialogResult = DialogResult.OK;
             Close();
