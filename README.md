@@ -1,26 +1,28 @@
 # GroqVoice
 
+# ⬇️ Download
+
+### 👉 **[GroqVoice-fd.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)** &nbsp;&nbsp; *(720 KB, recommended — needs [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0))*
+
+### 👉 **[GroqVoice-sc.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)** &nbsp;&nbsp; *(70 MB, self-contained — nothing else to install)*
+
+[![Download recommended](https://img.shields.io/badge/⬇-GroqVoice--fd.exe%20%E2%80%94%20720%20KB-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)
+[![Download self-contained](https://img.shields.io/badge/⬇-GroqVoice--sc.exe%20%E2%80%94%2070%20MB-1f6feb?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)
+[![All releases](https://img.shields.io/badge/All-Releases-6e7681?style=for-the-badge&logo=github&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases)
+
+> Click any link above and the .exe starts downloading immediately — no need to dig through GitHub's UI.
+> **Windows SmartScreen** may warn the .exe is from an unidentified publisher (it isn't code-signed yet). Click **More info → Run anyway**.
+
+---
+
+## What it is
+
 Lightweight Windows tray app for fast voice dictation and voice-driven LLM tasks via [Groq](https://groq.com).
 Hold **Win+Ctrl**, speak, release — your speech gets transcribed (Whisper) and pasted into the focused window. Start your sentence with `task` / `задача` / `задание` and the transcript is routed through Llama 3.3 70B instead, so you can say *"task: draw an ASCII cat"* and have the result pasted.
 
 Russian + English mixed dictation works out of the box.
 
-[![Download .exe](https://img.shields.io/badge/Download-GroqVoice--fd.exe%20(720%20KB)-brightgreen?style=for-the-badge&logo=windows)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)
-[![Self-contained](https://img.shields.io/badge/Self--contained-GroqVoice--sc.exe%20(70%20MB)-blue?style=for-the-badge&logo=windows)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)
-[![Releases](https://img.shields.io/badge/All-Releases-lightgrey?style=for-the-badge&logo=github)](https://github.com/abirzgals/GroqVoice/releases)
-
 ![framework: .NET 8](https://img.shields.io/badge/.NET-8.0-512bd4) ![lang: C%23](https://img.shields.io/badge/C%23-WinForms-239120) ![runs in: system tray](https://img.shields.io/badge/runs%20in-system%20tray-blue)
-
-## ⬇ Download
-
-| Build | Size | Requires | Direct link |
-|---|---|---|---|
-| **Recommended** | ~720 KB | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (one-time install) | **[GroqVoice-fd.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)** |
-| Self-contained | ~70 MB | nothing — bundles .NET runtime | **[GroqVoice-sc.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)** |
-
-These links always point to the latest release. Browse all versions on the [Releases page](https://github.com/abirzgals/GroqVoice/releases).
-
-> **Windows SmartScreen** may warn that the .exe is from an unidentified publisher (the binary isn't code-signed). Click **More info → Run anyway** — or right-click → Properties → tick **Unblock** before launching.
 
 ---
 
