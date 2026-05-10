@@ -53,6 +53,7 @@ public sealed class TrayContext : ApplicationContext
         };
         _hotkey.ChordPressed  += OnChordPressed;
         _hotkey.ChordReleased += OnChordReleased;
+        _hotkey.ScreenshotTriggered += OnScreenshotTriggered;
 
         if (_cfg.Autostart) Autostart.Enable(Application.ExecutablePath);
     }
@@ -177,6 +178,61 @@ public sealed class TrayContext : ApplicationContext
         ShowBalloon("Microphone changed",
             string.IsNullOrEmpty(nameContains) ? "Now using system default input." : $"Now using: {nameContains}",
             ToolTipIcon.Info);
+    }
+
+    private void OnScreenshotTriggered()
+    {
+        // Hook callback runs on the UI thread already, but defer the modal
+        // dialog to the next message-pump tick so we return from the hook
+        // promptly (Windows unhooks slow callbacks).
+        _ui.Post(_ => RunSnipping(), null);
+    }
+
+    private void RunSnipping()
+    {
+        if (_busy) Log.Info("snip triggered while busy — proceeding anyway");
+        Log.Info("screenshot snip: opening overlay");
+        Bitmap? cropped = null;
+        try
+        {
+            using var form = new SnippingForm();
+            var dr = form.ShowDialog();
+            if (dr == DialogResult.OK && form.Result != null)
+            {
+                cropped = (Bitmap)form.Result.Clone();
+            }
+        }
+        catch (Exception ex) { Log.Error("snip overlay failed", ex); ShowBalloon("Snip failed", ex.Message, ToolTipIcon.Error); return; }
+
+        if (cropped == null)
+        {
+            Log.Info("snip cancelled");
+            return;
+        }
+
+        try
+        {
+            // Clipboard requires STA; UI thread is STA. Set both Bitmap and PNG for compatibility.
+            var data = new DataObject();
+            data.SetData(DataFormats.Bitmap, true, cropped);
+            using (var ms = new MemoryStream())
+            {
+                cropped.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                data.SetData("PNG", false, ms.ToArray());
+            }
+            Clipboard.SetDataObject(data, copy: true);
+            Log.Info($"snip copied to clipboard: {cropped.Width}×{cropped.Height}");
+            if (_cfg.PlayFeedbackSounds) Click.Low();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("clipboard set image failed", ex);
+            ShowBalloon("Snip clipboard error", ex.Message, ToolTipIcon.Error);
+        }
+        finally
+        {
+            cropped.Dispose();
+        }
     }
 
     private void OnChordPressed()

@@ -27,6 +27,8 @@ public sealed class Hotkey : IDisposable
     public event Action? ChordPressed;
     /// <summary>clean=false means a third key was pressed during the chord.</summary>
     public event Action<bool>? ChordReleased;
+    /// <summary>Fires once when Win+Ctrl+Alt are all simultaneously held. Cancels any in-progress voice recording.</summary>
+    public event Action? ScreenshotTriggered;
 
     // ---- low-level hook plumbing ----
     private const int WH_KEYBOARD_LL = 13;
@@ -39,6 +41,8 @@ public sealed class Hotkey : IDisposable
     private const int VK_RCONTROL = 0xA3;
     private const int VK_LWIN = 0x5B;
     private const int VK_RWIN = 0x5C;
+    private const int VK_LMENU = 0xA4;
+    private const int VK_RMENU = 0xA5;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KBDLLHOOKSTRUCT
@@ -68,8 +72,10 @@ public sealed class Hotkey : IDisposable
     // chord-detection (low-level)
     private bool _winHeld;
     private bool _ctrlHeld;
+    private bool _altHeld;
     private bool _chordActive;
     private bool _otherKeyDuringChord;
+    private bool _screenshotFired;   // gate so we only fire once per Win+Ctrl+Alt session
 
     // state machine (high-level: PTT vs toggle)
     private enum Mode { Idle, Toggle }
@@ -103,31 +109,58 @@ public sealed class Hotkey : IDisposable
 
         bool isWin = vk == VK_LWIN || vk == VK_RWIN;
         bool isCtrl = vk == VK_LCONTROL || vk == VK_RCONTROL;
+        bool isAlt = vk == VK_LMENU || vk == VK_RMENU;
 
         if (isDown)
         {
             if (isWin) _winHeld = true;
             else if (isCtrl) _ctrlHeld = true;
+            else if (isAlt) _altHeld = true;
             else if (_chordActive) _otherKeyDuringChord = true;
 
+            // Win+Ctrl just became held
             if (!_chordActive && _winHeld && _ctrlHeld)
             {
                 _chordActive = true;
                 _otherKeyDuringChord = false;
-                OnLowChordDown();
+                _screenshotFired = false;
+
+                if (_altHeld)
+                {
+                    // All three down at once → screenshot, no voice
+                    _screenshotFired = true;
+                    try { ScreenshotTriggered?.Invoke(); } catch { }
+                }
+                else
+                {
+                    OnLowChordDown();
+                }
+            }
+            // Alt arrived while Win+Ctrl already held → cancel voice, fire screenshot
+            else if (_chordActive && !_screenshotFired && _winHeld && _ctrlHeld && _altHeld)
+            {
+                _screenshotFired = true;
+                CancelVoiceLocked();
+                try { ScreenshotTriggered?.Invoke(); } catch { }
             }
         }
         else if (isUp)
         {
             if (isWin) _winHeld = false;
             else if (isCtrl) _ctrlHeld = false;
+            else if (isAlt) _altHeld = false;
 
             if (_chordActive && (!_winHeld || !_ctrlHeld))
             {
                 _chordActive = false;
                 bool clean = !_otherKeyDuringChord;
                 _otherKeyDuringChord = false;
-                OnLowChordUp(clean);
+                bool wasScreenshot = _screenshotFired;
+                _screenshotFired = false;
+
+                if (!wasScreenshot)
+                    OnLowChordUp(clean);
+                // else: voice never started, nothing to release
             }
         }
 
@@ -224,6 +257,24 @@ public sealed class Hotkey : IDisposable
     {
         _doubleTapTimer?.Dispose();
         _doubleTapTimer = null;
+    }
+
+    /// <summary>Aborts any voice recording (PTT or toggle) and tells the caller to discard.</summary>
+    private void CancelVoiceLocked()
+    {
+        bool fireDirty = false;
+        lock (_smLock)
+        {
+            if (_recordingActive || _mode == Mode.Toggle || _waitingForSecondTap)
+            {
+                fireDirty = _recordingActive || _mode == Mode.Toggle;
+                _recordingActive = false;
+                _mode = Mode.Idle;
+                _waitingForSecondTap = false;
+                CancelDoubleTapTimerLocked();
+            }
+        }
+        if (fireDirty) try { ChordReleased?.Invoke(false); } catch { }
     }
 
     public void Dispose()

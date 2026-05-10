@@ -69,6 +69,7 @@ cd GroqVoice
 |---|---|
 | **Hold Win+Ctrl**, speak, release | Push-to-talk: STT → paste транскрипта в активное окно |
 | **Double-tap Win+Ctrl** (быстро два раза) | Toggle: запись стартует и держится. Любой следующий tap её останавливает. |
+| **Win+Ctrl+Alt** (все три вместе) | Snipping: экран фризится, мышкой выделяешь область → картинка в clipboard |
 | Begin with `task: …` / `задача: …` | LLM-ответ → paste в активное окно |
 | **Win+Ctrl + любая клавиша** | OS shortcut работает обычно (Win+Ctrl+D, Win+Ctrl+→ и т.д.); запись отбрасывается |
 | Right-click tray | Setup, Open config / vocabulary / log, Microphone picker, Start with Windows, Quit |
