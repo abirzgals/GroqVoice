@@ -212,16 +212,34 @@ public sealed class TrayContext : ApplicationContext
 
         try
         {
-            // Clipboard requires STA; UI thread is STA. Set both Bitmap and PNG for compatibility.
+            // Multi-format clipboard payload. Different apps prefer different formats:
+            //   • CF_DIB  — most image editors (Photoshop, Krita, GIMP, Office)
+            //   • PNG     — modern web apps (Slack, Discord browser, Notion)
+            //   • Bitmap  — last-resort fallback (MS Paint, ancient tools)
             var data = new DataObject();
-            data.SetData(DataFormats.Bitmap, true, cropped);
-            using (var ms = new MemoryStream())
+
+            // CF_DIB: serialize as BMP then strip the 14-byte BITMAPFILEHEADER
+            using (var bmpStream = new MemoryStream())
             {
-                cropped.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                data.SetData("PNG", false, ms.ToArray());
+                cropped.Save(bmpStream, System.Drawing.Imaging.ImageFormat.Bmp);
+                var bmp = bmpStream.ToArray();
+                var dib = new byte[bmp.Length - 14];
+                Buffer.BlockCopy(bmp, 14, dib, 0, dib.Length);
+                data.SetData(DataFormats.Dib, false, dib);
             }
+
+            // PNG
+            using (var pngStream = new MemoryStream())
+            {
+                cropped.Save(pngStream, System.Drawing.Imaging.ImageFormat.Png);
+                data.SetData("PNG", false, pngStream.ToArray());
+            }
+
+            // CF_BITMAP fallback (the autoconvert flag lets .NET hand it off to Win32)
+            data.SetData(DataFormats.Bitmap, true, cropped);
+
             Clipboard.SetDataObject(data, copy: true);
-            Log.Info($"snip copied to clipboard: {cropped.Width}×{cropped.Height}");
+            Log.Info($"snip copied to clipboard: {cropped.Width}×{cropped.Height} (DIB + PNG + Bitmap)");
             if (_cfg.PlayFeedbackSounds) Click.Low();
         }
         catch (Exception ex)

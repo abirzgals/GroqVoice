@@ -140,7 +140,17 @@ public sealed class SnippingForm : Form
             var clamped = Rectangle.Intersect(_sel, new Rectangle(0, 0, _screenshot.Width, _screenshot.Height));
             if (clamped.Width >= 4 && clamped.Height >= 4)
             {
-                Result = _screenshot.Clone(clamped, _screenshot.PixelFormat);
+                // 24bpp RGB (no alpha) — legacy editors (Photoshop, Krita, Paint, MS Office)
+                // mishandle ARGB pastes because CF_DIB has no agreed alpha convention.
+                var crop = new Bitmap(clamped.Width, clamped.Height, PixelFormat.Format24bppRgb);
+                using (var g = Graphics.FromImage(crop))
+                {
+                    g.DrawImage(_screenshot,
+                        new Rectangle(0, 0, clamped.Width, clamped.Height),
+                        clamped,
+                        GraphicsUnit.Pixel);
+                }
+                Result = crop;
                 DialogResult = DialogResult.OK;
                 Close();
                 return;
