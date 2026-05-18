@@ -34,6 +34,13 @@ public sealed class AnnotatorForm : Form
     private readonly Dictionary<Color, Panel> _colorSwatches = new();
     private readonly Dictionary<int, Panel> _sizeSwatches = new();
 
+    // PNG-encoded history snapshots, newest at the end
+    private readonly List<byte[]> _undo = new();
+    private readonly List<byte[]> _redo = new();
+    private const int HistoryMax = 30;
+    private Button? _undoBtn;
+    private Button? _redoBtn;
+
     public AnnotatorForm(Bitmap image)
     {
         _composite = (Bitmap)image.Clone();
@@ -164,6 +171,17 @@ public sealed class AnnotatorForm : Form
         }
         AddDivider();
 
+        // Undo / Redo
+        _undoBtn = MakeToolButton("Undo (Ctrl+Z)");
+        _undoBtn.Click += (_, _) => DoUndo();
+        _toolbar.Controls.Add(_undoBtn);
+
+        _redoBtn = MakeToolButton("Redo (Ctrl+Y)");
+        _redoBtn.Click += (_, _) => DoRedo();
+        _toolbar.Controls.Add(_redoBtn);
+
+        AddDivider();
+
         // Reset + Close
         var reset = MakeToolButton("Reset");
         reset.Click += (_, _) => DoReset();
@@ -174,6 +192,7 @@ public sealed class AnnotatorForm : Form
         _toolbar.Controls.Add(done);
 
         RefreshSelection();
+        RefreshUndoRedo();
     }
 
     private static Button MakeToolButton(string text)
@@ -212,12 +231,81 @@ public sealed class AnnotatorForm : Form
                 ? BorderStyle.FixedSingle : BorderStyle.None;
     }
 
+    // ---------------- history ----------------
+
+    private byte[] Snapshot()
+    {
+        using var ms = new MemoryStream();
+        _composite.Save(ms, ImageFormat.Png);
+        return ms.ToArray();
+    }
+
+    private Bitmap LoadSnapshot(byte[] png)
+    {
+        using var ms = new MemoryStream(png);
+        using var loaded = new Bitmap(ms);
+        // copy so we don't keep a reference to the stream-backed Bitmap
+        var copy = new Bitmap(loaded.Width, loaded.Height, PixelFormat.Format24bppRgb);
+        using var g = Graphics.FromImage(copy);
+        g.DrawImage(loaded, 0, 0);
+        return copy;
+    }
+
+    private void PushUndo()
+    {
+        _undo.Add(Snapshot());
+        if (_undo.Count > HistoryMax) _undo.RemoveAt(0);
+        _redo.Clear();
+        RefreshUndoRedo();
+    }
+
+    private void DoUndo()
+    {
+        if (_undo.Count == 0) return;
+        var snap = _undo[^1];
+        _undo.RemoveAt(_undo.Count - 1);
+        _redo.Add(Snapshot());
+        if (_redo.Count > HistoryMax) _redo.RemoveAt(0);
+
+        var old = _composite;
+        _composite = LoadSnapshot(snap);
+        _canvas.Image = _composite;
+        old.Dispose();
+
+        try { ClipboardImage.Set(_composite); } catch { }
+        RefreshUndoRedo();
+    }
+
+    private void DoRedo()
+    {
+        if (_redo.Count == 0) return;
+        var snap = _redo[^1];
+        _redo.RemoveAt(_redo.Count - 1);
+        _undo.Add(Snapshot());
+        if (_undo.Count > HistoryMax) _undo.RemoveAt(0);
+
+        var old = _composite;
+        _composite = LoadSnapshot(snap);
+        _canvas.Image = _composite;
+        old.Dispose();
+
+        try { ClipboardImage.Set(_composite); } catch { }
+        RefreshUndoRedo();
+    }
+
+    private void RefreshUndoRedo()
+    {
+        if (_undoBtn != null) _undoBtn.Enabled = _undo.Count > 0;
+        if (_redoBtn != null) _redoBtn.Enabled = _redo.Count > 0;
+    }
+
     // ---------------- drawing ----------------
 
     private void OnCanvasMouseDown(object? sender, MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
         _drawing = true;
+        PushUndo();                  // snapshot before any pixels change
         _strokeStart = e.Location;
         _lastPoint = e.Location;
     }
@@ -295,6 +383,7 @@ public sealed class AnnotatorForm : Form
 
     private void DoReset()
     {
+        PushUndo();                // so the user can undo the reset itself
         var old = _composite;
         _composite = (Bitmap)_baseline.Clone();
         _canvas.Image = _composite;
@@ -304,7 +393,10 @@ public sealed class AnnotatorForm : Form
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyCode == Keys.Escape) Close();
+        if (e.KeyCode == Keys.Escape) { Close(); return; }
+        if (e.Control && !e.Shift && e.KeyCode == Keys.Z) { DoUndo(); e.Handled = true; e.SuppressKeyPress = true; return; }
+        if (e.Control && e.KeyCode == Keys.Y) { DoRedo(); e.Handled = true; e.SuppressKeyPress = true; return; }
+        if (e.Control && e.Shift && e.KeyCode == Keys.Z) { DoRedo(); e.Handled = true; e.SuppressKeyPress = true; return; }
     }
 
     protected override void OnShown(EventArgs e)
