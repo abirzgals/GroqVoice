@@ -228,12 +228,30 @@ public sealed class TrayContext : ApplicationContext
                 data.SetData(DataFormats.Dib, false, dib);
             }
 
-            // PNG
+            // PNG under multiple registered names — different apps look under different keys:
+            //   "PNG"               classic Windows convention (most editors)
+            //   "image/png"         web/Chromium/Electron convention (VS Code, Discord, Notion)
+            //   "PortableNetworkGraphics" — older Adobe / Microsoft Office variant
+            byte[] pngBytes;
             using (var pngStream = new MemoryStream())
             {
                 cropped.Save(pngStream, System.Drawing.Imaging.ImageFormat.Png);
-                data.SetData("PNG", false, pngStream.ToArray());
+                pngBytes = pngStream.ToArray();
             }
+            data.SetData("PNG", false, pngBytes);
+            data.SetData("image/png", false, pngBytes);
+            data.SetData("PortableNetworkGraphics", false, pngBytes);
+
+            // Also save to a temp file and expose via CF_HDROP / "FileDrop" so apps
+            // that accept "pasted image as a file" pick it up.
+            try
+            {
+                var tmp = Path.Combine(Path.GetTempPath(), $"GroqVoice_snip_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                File.WriteAllBytes(tmp, pngBytes);
+                data.SetData(DataFormats.FileDrop, true, new[] { tmp });
+                Log.Info($"snip png written to {tmp} and added as FileDrop");
+            }
+            catch (Exception ex) { Log.Warn($"FileDrop attach failed: {ex.Message}"); }
 
             // CF_BITMAP fallback (the autoconvert flag lets .NET hand it off to Win32)
             data.SetData(DataFormats.Bitmap, true, cropped);
