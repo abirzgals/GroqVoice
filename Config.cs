@@ -43,6 +43,10 @@ public sealed class Config
     // a second tap arriving within this window after a quick first tap = double-tap toggle
     [JsonPropertyName("doubleTapWindowMs")] public int DoubleTapWindowMs { get; set; } = 400;
 
+    // after Win+Ctrl+Alt snip, open the annotator window immediately
+    // (bypasses the easily-missed Windows notification balloon)
+    [JsonPropertyName("autoOpenAnnotator")] public bool AutoOpenAnnotator { get; set; } = true;
+
     public static string Dir => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GroqVoice");

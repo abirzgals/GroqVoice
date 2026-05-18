@@ -125,6 +125,16 @@ public sealed class TrayContext : ApplicationContext
         };
         m.Items.Add(openFolder);
 
+        var annotate = new ToolStripMenuItem("Annotate last snip");
+        annotate.Click += (_, _) =>
+        {
+            if (_lastSnipBitmap == null)
+                ShowBalloon("No snip yet", "Press Win+Ctrl+Alt to take a screenshot first.", ToolTipIcon.Info);
+            else
+                OpenAnnotator(_lastSnipBitmap);
+        };
+        m.Items.Add(annotate);
+
         var mics = new ToolStripMenuItem("Microphone");
         mics.DropDownOpening += (_, _) => RebuildMicMenu(mics);
         m.Items.Add(mics);
@@ -224,15 +234,23 @@ public sealed class TrayContext : ApplicationContext
             Log.Info($"snip copied to clipboard: {cropped.Width}×{cropped.Height}");
             if (_cfg.PlayFeedbackSounds) Click.Low();
 
-            // Remember the snip so a balloon click can open the annotator with it.
-            // We hand a *clone* to ourselves — `cropped` is disposed in finally.
+            // Remember the snip so the tray menu item / future balloon click can open it.
             _lastSnipBitmap?.Dispose();
             _lastSnipBitmap = (Bitmap)cropped.Clone();
 
-            ShowActionableBalloon(
-                "Screenshot copied",
-                "Click here to annotate (arrows, marker, pencil) — clipboard updates live.",
-                () => OpenAnnotator(_lastSnipBitmap));
+            if (_cfg.AutoOpenAnnotator)
+            {
+                Log.Info("auto-opening annotator (autoOpenAnnotator=true)");
+                OpenAnnotator(_lastSnipBitmap);
+            }
+            else
+            {
+                Log.Info("showing balloon (Win11 may route to Action Center if Focus Assist is on)");
+                ShowActionableBalloon(
+                    "Screenshot copied",
+                    "Click here to annotate (arrows, marker, pencil) — clipboard updates live.",
+                    () => OpenAnnotator(_lastSnipBitmap));
+            }
         }
         catch (Exception ex)
         {
