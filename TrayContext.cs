@@ -21,6 +21,8 @@ public sealed class TrayContext : ApplicationContext
 
     private CancellationTokenSource? _busyCts;
     private volatile bool _busy;
+    private Bitmap? _lastSnipBitmap;
+    private Action? _balloonAction;
 
     public TrayContext(Config cfg)
     {
@@ -39,6 +41,12 @@ public sealed class TrayContext : ApplicationContext
             Text = "GroqVoice — hold Win+Ctrl to dictate",
             ContextMenuStrip = BuildMenu(),
         };
+        _tray.BalloonTipClicked += (_, _) =>
+        {
+            var a = _balloonAction; _balloonAction = null;
+            try { a?.Invoke(); } catch (Exception ex) { Log.Error("balloon action failed", ex); }
+        };
+        _tray.BalloonTipClosed += (_, _) => _balloonAction = null;
 
         Recorder.LogDevices(_cfg.InputDeviceContains);
 
@@ -212,53 +220,19 @@ public sealed class TrayContext : ApplicationContext
 
         try
         {
-            // Multi-format clipboard payload. Different apps prefer different formats:
-            //   • CF_DIB  — most image editors (Photoshop, Krita, GIMP, Office)
-            //   • PNG     — modern web apps (Slack, Discord browser, Notion)
-            //   • Bitmap  — last-resort fallback (MS Paint, ancient tools)
-            var data = new DataObject();
-
-            // CF_DIB: serialize as BMP then strip the 14-byte BITMAPFILEHEADER
-            using (var bmpStream = new MemoryStream())
-            {
-                cropped.Save(bmpStream, System.Drawing.Imaging.ImageFormat.Bmp);
-                var bmp = bmpStream.ToArray();
-                var dib = new byte[bmp.Length - 14];
-                Buffer.BlockCopy(bmp, 14, dib, 0, dib.Length);
-                data.SetData(DataFormats.Dib, false, dib);
-            }
-
-            // PNG under multiple registered names — different apps look under different keys:
-            //   "PNG"               classic Windows convention (most editors)
-            //   "image/png"         web/Chromium/Electron convention (VS Code, Discord, Notion)
-            //   "PortableNetworkGraphics" — older Adobe / Microsoft Office variant
-            byte[] pngBytes;
-            using (var pngStream = new MemoryStream())
-            {
-                cropped.Save(pngStream, System.Drawing.Imaging.ImageFormat.Png);
-                pngBytes = pngStream.ToArray();
-            }
-            data.SetData("PNG", false, pngBytes);
-            data.SetData("image/png", false, pngBytes);
-            data.SetData("PortableNetworkGraphics", false, pngBytes);
-
-            // Also save to a temp file and expose via CF_HDROP / "FileDrop" so apps
-            // that accept "pasted image as a file" pick it up.
-            try
-            {
-                var tmp = Path.Combine(Path.GetTempPath(), $"GroqVoice_snip_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-                File.WriteAllBytes(tmp, pngBytes);
-                data.SetData(DataFormats.FileDrop, true, new[] { tmp });
-                Log.Info($"snip png written to {tmp} and added as FileDrop");
-            }
-            catch (Exception ex) { Log.Warn($"FileDrop attach failed: {ex.Message}"); }
-
-            // CF_BITMAP fallback (the autoconvert flag lets .NET hand it off to Win32)
-            data.SetData(DataFormats.Bitmap, true, cropped);
-
-            Clipboard.SetDataObject(data, copy: true);
-            Log.Info($"snip copied to clipboard: {cropped.Width}×{cropped.Height} (DIB + PNG + Bitmap)");
+            ClipboardImage.Set(cropped);
+            Log.Info($"snip copied to clipboard: {cropped.Width}×{cropped.Height}");
             if (_cfg.PlayFeedbackSounds) Click.Low();
+
+            // Remember the snip so a balloon click can open the annotator with it.
+            // We hand a *clone* to ourselves — `cropped` is disposed in finally.
+            _lastSnipBitmap?.Dispose();
+            _lastSnipBitmap = (Bitmap)cropped.Clone();
+
+            ShowActionableBalloon(
+                "Screenshot copied",
+                "Click here to annotate (arrows, marker, pencil) — clipboard updates live.",
+                () => OpenAnnotator(_lastSnipBitmap));
         }
         catch (Exception ex)
         {
@@ -269,6 +243,29 @@ public sealed class TrayContext : ApplicationContext
         {
             cropped.Dispose();
         }
+    }
+
+    private void OpenAnnotator(Bitmap? src)
+    {
+        if (src == null) return;
+        try
+        {
+            var form = new AnnotatorForm(src);
+            form.Show();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("annotator open failed", ex);
+            ShowBalloon("Annotator failed", ex.Message, ToolTipIcon.Error);
+        }
+    }
+
+    /// <summary>Show a balloon and attach a one-shot callback for when the user clicks it.</summary>
+    private void ShowActionableBalloon(string title, string body, Action onClick)
+    {
+        _balloonAction = onClick;
+        try { _tray.ShowBalloonTip(8000, title, body, ToolTipIcon.Info); }
+        catch { _balloonAction = null; }
     }
 
     private void OnChordPressed()
@@ -482,6 +479,7 @@ public sealed class TrayContext : ApplicationContext
             _idleIcon.Dispose();
             _recIcon.Dispose();
             _busyIcon.Dispose();
+            _lastSnipBitmap?.Dispose();
         }
         base.Dispose(disposing);
     }
