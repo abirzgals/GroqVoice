@@ -10,14 +10,14 @@ namespace GroqVoice;
 /// </summary>
 public static class Paster
 {
-    public static void Paste(string text)
+    public static void Paste(string text, bool restoreClipboard = false)
     {
         if (string.IsNullOrEmpty(text)) return;
 
         string? prev = null;
         var t = new Thread(() =>
         {
-            try { if (Clipboard.ContainsText()) prev = Clipboard.GetText(); } catch { }
+            try { if (restoreClipboard && Clipboard.ContainsText()) prev = Clipboard.GetText(); } catch { }
             try { Clipboard.SetText(text); } catch { }
         });
         t.SetApartmentState(ApartmentState.STA);
@@ -26,7 +26,10 @@ public static class Paster
 
         SendCtrlV();
 
-        // give the foreground app ~250 ms to consume the paste before we restore the clipboard
+        if (!restoreClipboard) return;
+
+        // optional legacy behaviour: hand the foreground app ~250 ms to consume the
+        // paste, then restore whatever the user had on the clipboard beforehand.
         ThreadPool.QueueUserWorkItem(_ =>
         {
             Thread.Sleep(250);

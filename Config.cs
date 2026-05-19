@@ -47,6 +47,12 @@ public sealed class Config
     // (bypasses the easily-missed Windows notification balloon)
     [JsonPropertyName("autoOpenAnnotator")] public bool AutoOpenAnnotator { get; set; } = true;
 
+    // when true (legacy), restore the previous clipboard ~250 ms after Ctrl+V paste.
+    // when false (default), the dictated text stays on the clipboard so it can be
+    // re-pasted manually — essential for Chrome Remote Desktop / RDP / sluggish apps
+    // where the initial Ctrl+V may not reach the remote side in time.
+    [JsonPropertyName("restoreClipboardAfterPaste")] public bool RestoreClipboardAfterPaste { get; set; } = false;
+
     public static string Dir => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GroqVoice");

@@ -139,6 +139,20 @@ public sealed class TrayContext : ApplicationContext
         mics.DropDownOpening += (_, _) => RebuildMicMenu(mics);
         m.Items.Add(mics);
 
+        var keepClip = new ToolStripMenuItem("Keep dictated text in clipboard")
+        {
+            CheckOnClick = true,
+            Checked = !_cfg.RestoreClipboardAfterPaste,
+            ToolTipText = "When on, the recognised text stays on the clipboard so you can re-paste it (needed for Chrome RDP / RDP). When off, the previous clipboard is restored.",
+        };
+        keepClip.CheckedChanged += (_, _) =>
+        {
+            _cfg.RestoreClipboardAfterPaste = !keepClip.Checked;
+            try { _cfg.Save(); } catch (Exception ex) { Log.Warn($"save keepClipboard failed: {ex.Message}"); }
+            Log.Info($"keepDictatedTextInClipboard={keepClip.Checked} (restoreAfterPaste={_cfg.RestoreClipboardAfterPaste})");
+        };
+        m.Items.Add(keepClip);
+
         var auto = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = Autostart.IsEnabled() };
         auto.CheckedChanged += (_, _) =>
         {
@@ -392,7 +406,7 @@ public sealed class TrayContext : ApplicationContext
                 }
 
                 if (!string.IsNullOrEmpty(output))
-                    _ui.Post(_ => Paster.Paste(output), null);
+                    _ui.Post(_ => Paster.Paste(output, restoreClipboard: _cfg.RestoreClipboardAfterPaste), null);
 
                 if (_cfg.PlayFeedbackSounds) Click.Low();
             }
