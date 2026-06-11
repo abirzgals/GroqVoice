@@ -13,6 +13,18 @@
 > Click any link above and the .exe starts downloading immediately — no need to dig through GitHub's UI.
 > **Windows SmartScreen** may warn the .exe is from an unidentified publisher (it isn't code-signed yet). Click **More info → Run anyway**.
 
+### 🍎 macOS
+
+Нативная Mac-версия (Swift, menu bar, push-to-talk на **Fn/🌐**) живёт в папке [macos/](macos/). Собирается одной командой:
+
+```bash
+git clone https://github.com/abirzgals/GroqVoice.git
+cd GroqVoice/macos
+./build-app.sh    # → GroqVoice.app (нужен только Xcode Command Line Tools)
+```
+
+Подробности — в [macos/README.md](macos/README.md).
+
 ---
 
 ## What it is

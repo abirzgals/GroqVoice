@@ -1,0 +1,65 @@
+# GroqVoice for macOS
+
+Нативный macOS-порт [GroqVoice](https://github.com/abirzgals/GroqVoice) — menu bar утилита для голосовой диктовки и voice-driven LLM-задач через [Groq](https://groq.com).
+
+**Удерживай Fn (🌐), говори, отпусти** — речь транскрибируется (Whisper) и вставляется в активное окно. Начни фразу с `task` / `задача` / `задание` — транскрипт уйдёт в Llama 3.3 70B, и вставится ответ модели.
+
+Swift + AppKit, без зависимостей. Бинарник ~300 KB.
+
+## Сборка
+
+```bash
+./build-app.sh
+# результат: GroqVoice.app в корне репозитория
+mv GroqVoice.app /Applications/
+open /Applications/GroqVoice.app
+```
+
+Требуется только Xcode Command Line Tools (`xcode-select --install`), macOS 13+.
+
+## Первый запуск
+
+1. **API-ключ** — приложение само попросит; ключ с [console.groq.com](https://console.groq.com) (бесплатный tier достаточен). Хранится в `~/Library/Application Support/GroqVoice/config.json`.
+2. **Accessibility** — System Settings → Privacy & Security → Accessibility → включи GroqVoice. Нужно для глобального перехвата Fn и синтеза Cmd+V.
+3. **Microphone** — разреши при первом запросе.
+4. **Важно:** System Settings → Keyboard → **"Press 🌐 key to" → "Do Nothing"** — иначе двойной тап Fn открывает системную диктовку/эмодзи-пикер.
+
+## Использование
+
+| Действие | Что делает |
+|---|---|
+| **Hold Fn**, говори, отпусти | Push-to-talk: STT → paste в активное окно |
+| **Double-tap Fn** | Lock-режим: запись держится; любой следующий тап Fn останавливает |
+| Начни с `task: …` / `задача: …` | LLM-ответ вместо транскрипта |
+| **Fn + другая клавиша** | OS shortcut работает как обычно; запись отбрасывается |
+| Иконка в menu bar | 🎙 ready → 🔴 recording → 🟠 locked → ⏳ processing |
+
+Граница «тап»/«hold» — 250 мс (`pttHoldMs`), окно двойного тапа — 400 мс (`doubleTapWindowMs`).
+
+## Меню (right-click / click иконки)
+
+Set API Key, Open Config / Vocabulary / Log, Launch at Login, Quit.
+
+## Файлы
+
+Всё в `~/Library/Application Support/GroqVoice/`:
+
+- `config.json` — настройки (те же поля, что в Windows-версии: `taskKeywords`, `language`, `minRecordingSeconds`, `silencePeakPercent`, `taskSystemPrompt`, …)
+- `vocabulary.txt` — словарь редких слов/имён для биаса Whisper, hot-reload по mtime, лимит ~700 символов
+- `log.txt` — лог с ротацией на 1 MB
+- `last.wav` — последняя запись для отладки (`"saveLastWav": false` чтобы отключить)
+
+## Отличия от Windows-версии
+
+- Хоткей: **Fn** вместо Win+Ctrl (настроено под macOS-привычку — как push-to-talk в системной диктовке)
+- Микрофон: системный default (выбирается в System Settings → Sound → Input)
+- Snipping-режим (Win+Ctrl+Alt) не портирован — на Mac есть встроенный Cmd+Shift+4
+- Autostart через `SMAppService` (Login Items) вместо реестра
+
+## Privacy
+
+Как в оригинале: ключ только локально, аудио уходит только в `api.groq.com`, никакой телеметрии.
+
+## License
+
+MIT
