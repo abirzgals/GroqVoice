@@ -45,6 +45,13 @@ Set API Key, Open Config / Vocabulary / Log, Launch at Login, Quit.
 Всё в `~/Library/Application Support/GroqVoice/`:
 
 - `config.json` — настройки (те же поля, что в Windows-версии: `taskKeywords`, `language`, `minRecordingSeconds`, `silencePeakPercent`, `taskSystemPrompt`, …)
+
+  Вместо одиночных `transcriptionModel`/`chatModel` здесь **списки моделей по приоритету** с автоматическим fallback при rate limit (429): модель получает cooldown из `retry-after`, запрос уходит в следующую; когда cooldown истекает — снова пробуется более сильная.
+
+  ```json
+  "transcriptionModels": ["whisper-large-v3", "whisper-large-v3-turbo"],
+  "chatModels": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+  ```
 - `vocabulary.txt` — словарь редких слов/имён для биаса Whisper, hot-reload по mtime, лимит ~700 символов
 - `log.txt` — лог с ротацией на 1 MB
 - `last.wav` — последняя запись для отладки (`"saveLastWav": false` чтобы отключить)

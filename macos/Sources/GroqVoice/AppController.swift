@@ -17,7 +17,9 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var config = Config.load()
     private let recorder = Recorder()
     private let vocabulary = Vocabulary()
-    private lazy var groq = GroqClient(apiKey: config.groqApiKey)
+    private lazy var groq = GroqClient(apiKey: config.groqApiKey,
+                                       transcriptionModels: config.transcriptionModels,
+                                       chatModels: config.chatModels)
     private let hotkey = HotkeyMonitor()
 
     private var phase: Phase = .idle
@@ -204,8 +206,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let transcript = try await self.groq.transcribe(
-                    wav: wav, model: cfg.transcriptionModel,
-                    language: cfg.language, prompt: vocabPrompt)
+                    wav: wav, language: cfg.language, prompt: vocabPrompt)
                 Log.write("STT result: \"\(transcript)\"")
 
                 let output: String
@@ -214,7 +215,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                                                     maxPosition: cfg.taskKeywordMaxWordPosition) {
                     Log.write("task mode → chat: \"\(query)\"")
                     let system = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
-                    output = try await self.groq.chat(userText: query, model: cfg.chatModel, systemPrompt: system)
+                    output = try await self.groq.chat(userText: query, systemPrompt: system)
                     Log.write("chat result: \"\(output.prefix(200))\"")
                 } else {
                     output = transcript

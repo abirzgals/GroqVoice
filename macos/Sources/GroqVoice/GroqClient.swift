@@ -3,17 +3,89 @@ import Foundation
 struct GroqError: LocalizedError {
     let status: Int
     let body: String
+    let retryAfter: TimeInterval?
+
     var errorDescription: String? { "Groq HTTP \(status): \(body.prefix(400))" }
+
+    /// 429 = rate limit, 404/400 = model not found / decommissioned,
+    /// 498/503 = capacity — all worth trying the next model in the chain.
+    var shouldFallback: Bool {
+        status == 429 || status == 404 || status == 498 || status == 503
+            || (status == 400 && body.contains("decommissioned"))
+    }
+
+    var suggestedCooldown: TimeInterval {
+        if status == 404 || status == 400 { return 3600 }  // model gone — don't retry soon
+        return retryAfter ?? 300
+    }
+
+    /// Parses "retry-after" header or Groq's "Please try again in 7m20.518s" body text.
+    static func parseRetryAfter(response: HTTPURLResponse?, body: String) -> TimeInterval? {
+        if let h = response?.value(forHTTPHeaderField: "retry-after"), let s = TimeInterval(h) {
+            return s
+        }
+        let pattern = #"try again in (?:(\d+)m)?([\d.]+)(ms|s)"#
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) else {
+            return nil
+        }
+        func group(_ i: Int) -> String? {
+            guard let r = Range(m.range(at: i), in: body) else { return nil }
+            return String(body[r])
+        }
+        let minutes = Double(group(1) ?? "") ?? 0
+        var value = Double(group(2) ?? "") ?? 0
+        if group(3) == "ms" { value /= 1000 }
+        return minutes * 60 + value + 1  // +1s of slack
+    }
 }
 
 final class GroqClient {
     var apiKey: String
+    private let sttChain: ModelChain
+    private let chatChain: ModelChain
 
-    init(apiKey: String) {
+    init(apiKey: String, transcriptionModels: [String], chatModels: [String]) {
         self.apiKey = apiKey
+        self.sttChain = ModelChain(transcriptionModels)
+        self.chatChain = ModelChain(chatModels)
     }
 
-    func transcribe(wav: Data, model: String, language: String, prompt: String) async throws -> String {
+    func transcribe(wav: Data, language: String, prompt: String) async throws -> String {
+        try await withFallback(chain: sttChain, kind: "STT") { model in
+            try await self.transcribeOnce(wav: wav, model: model, language: language, prompt: prompt)
+        }
+    }
+
+    func chat(userText: String, systemPrompt: String) async throws -> String {
+        try await withFallback(chain: chatChain, kind: "chat") { model in
+            try await self.chatOnce(userText: userText, model: model, systemPrompt: systemPrompt)
+        }
+    }
+
+    /// Tries each candidate model in priority order. A model that rate-limits
+    /// gets a cooldown and the next one is tried; once the cooldown expires the
+    /// stronger model is automatically preferred again.
+    private func withFallback<T>(chain: ModelChain, kind: String,
+                                 _ op: (String) async throws -> T) async throws -> T {
+        var lastError: Error?
+        for model in chain.candidates() {
+            do {
+                let result = try await op(model)
+                if lastError != nil { Log.write("\(kind): succeeded on fallback model \(model)") }
+                return result
+            } catch let e as GroqError where e.shouldFallback {
+                chain.markUnavailable(model, for: e.suggestedCooldown)
+                Log.write("\(kind): \(model) unavailable (HTTP \(e.status), cooldown \(Int(e.suggestedCooldown))s) → trying next model")
+                lastError = e
+            }
+        }
+        throw lastError ?? GroqError(status: 0, body: "no models configured", retryAfter: nil)
+    }
+
+    // MARK: - Single-model calls
+
+    private func transcribeOnce(wav: Data, model: String, language: String, prompt: String) async throws -> String {
         let url = URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -40,16 +112,19 @@ final class GroqClient {
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
         let (data, resp) = try await URLSession.shared.upload(for: req, from: body)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let http = resp as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
         guard status == 200 else {
-            throw GroqError(status: status, body: String(data: data, encoding: .utf8) ?? "")
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw GroqError(status: status, body: bodyText,
+                            retryAfter: GroqError.parseRetryAfter(response: http, body: bodyText))
         }
         struct R: Decodable { let text: String }
         let r = try JSONDecoder().decode(R.self, from: data)
         return r.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func chat(userText: String, model: String, systemPrompt: String) async throws -> String {
+    private func chatOnce(userText: String, model: String, systemPrompt: String) async throws -> String {
         let url = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -67,9 +142,12 @@ final class GroqClient {
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, resp) = try await URLSession.shared.data(for: req)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let http = resp as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
         guard status == 200 else {
-            throw GroqError(status: status, body: String(data: data, encoding: .utf8) ?? "")
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw GroqError(status: status, body: bodyText,
+                            retryAfter: GroqError.parseRetryAfter(response: http, body: bodyText))
         }
         struct R: Decodable {
             struct Choice: Decodable {
