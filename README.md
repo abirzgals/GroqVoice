@@ -21,7 +21,7 @@
 curl -fsSL https://raw.githubusercontent.com/abirzgals/GroqVoice/main/macos/install.sh | bash
 ```
 
-Или вручную: **[GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip)** *(200 KB, universal)* — распакуй, `xattr -cr GroqVoice.app`, перенеси в /Applications. При первом запуске разреши Microphone и Accessibility (промпты откроются сами) и вставь Groq API-ключ.
+Или вручную: **[GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip)** *(200 KB, universal)* — распакуй и перенеси в /Applications (пока без нотаризации: один раз `xattr -cr /Applications/GroqVoice.app`). При первом запуске разреши Microphone и Accessibility (промпты откроются сами) и вставь Groq API-ключ.
 
 Сборка из исходников и подробности — в [macos/README.md](macos/README.md). Страница загрузки: **[abirzgals.github.io/GroqVoice](https://abirzgals.github.io/GroqVoice/)**
 

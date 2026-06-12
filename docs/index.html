@@ -67,18 +67,22 @@
 
     <div class="card">
       <h2>🍎 macOS <span style="color:#9198a1;font-size:0.8rem">(Apple Silicon + Intel, macOS 13+)</span></h2>
-      <p class="note" style="margin-top:0">Paste in Terminal — downloads, installs and launches:</p>
+      <p class="note" style="margin-top:0">Recommended — paste in Terminal, it downloads, installs and launches:</p>
       <pre><code>curl -fsSL https://raw.githubusercontent.com/abirzgals/GroqVoice/main/macos/install.sh | bash</code></pre>
+      <a class="btn btn-primary" href="https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.dmg">
+        ⬇ GroqVoice-mac.dmg — 450 KB</a>
       <a class="btn btn-secondary" href="https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip">
-        ⬇ or GroqVoice-mac.zip — 200 KB</a>
+        ⬇ GroqVoice-mac.zip — 200 KB</a>
       <p class="note">First launch:</p>
       <ol>
         <li>Allow <b>Microphone</b> when asked</li>
         <li>Allow <b>Accessibility</b> (the prompt opens System Settings — toggle GroqVoice on)</li>
         <li>Paste your free <a href="https://console.groq.com" style="color:#58a6ff">Groq API key</a></li>
       </ol>
-      <p class="note">Hotkey: hold <b>Fn (🌐)</b>. If you download the zip manually, run
-      <code>xattr -cr GroqVoice.app</code> after unzipping (the app isn't notarized).</p>
+      <p class="note">Hotkey: hold <b>Fn (🌐)</b>. The app isn't notarized yet, so after a manual
+      DMG/zip download macOS will block the first open — run
+      <code>xattr -cr /Applications/GroqVoice.app</code> once, or use the Terminal
+      one-liner above which handles it for you.</p>
     </div>
   </div>
 
