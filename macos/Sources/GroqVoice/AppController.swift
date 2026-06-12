@@ -17,6 +17,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var config = Config.load()
     private let recorder = Recorder()
     private let vocabulary = Vocabulary()
+    private let snippets = Snippets()
     private lazy var groq = GroqClient(apiKey: config.groqApiKey,
                                        transcriptionModels: config.transcriptionModels,
                                        chatModels: config.chatModels)
@@ -38,6 +39,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         requestMicAccess()
         startHotkeyWhenTrusted()
+        syncAutostart()
 
         if config.groqApiKey.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.promptForApiKey(firstRun: true) }
@@ -83,6 +85,23 @@ final class AppController: NSObject, NSApplicationDelegate {
                 self.wireHotkey()
                 Log.write("event tap started after permission grant")
             }
+        }
+    }
+
+    /// Mirrors config.autostart into SMAppService (Login Items). Registers only
+    /// from .notRegistered so a user who disabled us in System Settings
+    /// (.requiresApproval) isn't re-nagged on every launch.
+    private func syncAutostart() {
+        let status = SMAppService.mainApp.status
+        guard config.autostart, status == .notRegistered else {
+            Log.write("launch-at-login status: \(status.rawValue) (autostart=\(config.autostart))")
+            return
+        }
+        do {
+            try SMAppService.mainApp.register()
+            Log.write("launch-at-login registered")
+        } catch {
+            Log.write("launch-at-login registration failed: \(error.localizedDescription)")
         }
     }
 
@@ -214,7 +233,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                                                     keywords: cfg.taskKeywords,
                                                     maxPosition: cfg.taskKeywordMaxWordPosition) {
                     Log.write("task mode → chat: \"\(query)\"")
-                    let system = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
+                    let base = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
+                    let system = base + self.snippets.systemPromptSection()
                     output = try await self.groq.chat(userText: query, systemPrompt: system)
                     Log.write("chat result: \"\(output.prefix(200))\"")
                 } else {
@@ -254,6 +274,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Set API Key…", action: #selector(menuSetApiKey), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Config", action: #selector(menuOpenConfig), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Vocabulary", action: #selector(menuOpenVocabulary), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Open Snippets", action: #selector(menuOpenSnippets), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Log", action: #selector(menuOpenLog), keyEquivalent: ""))
         menu.addItem(.separator())
         let login = NSMenuItem(title: "Launch at Login", action: #selector(menuToggleLogin), keyEquivalent: "")
@@ -291,19 +312,30 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     @objc private func menuOpenConfig() { NSWorkspace.shared.open(Config.fileURL) }
     @objc private func menuOpenVocabulary() { NSWorkspace.shared.open(Vocabulary.fileURL) }
+    @objc private func menuOpenSnippets() { NSWorkspace.shared.open(Snippets.fileURL) }
     @objc private func menuOpenLog() { NSWorkspace.shared.open(Log.fileURL) }
 
     @objc private func menuToggleLogin(_ sender: NSMenuItem) {
         do {
             if SMAppService.mainApp.status == .enabled {
                 try SMAppService.mainApp.unregister()
+                config.autostart = false
                 sender.state = .off
+                Log.write("launch-at-login disabled")
             } else {
                 try SMAppService.mainApp.register()
+                config.autostart = true
                 sender.state = .on
+                Log.write("launch-at-login enabled")
             }
+            config.save()
         } catch {
             Log.write("launch-at-login toggle failed: \(error.localizedDescription)")
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Launch at Login failed"
+            alert.informativeText = "macOS rejected the Login Item change: \(error.localizedDescription)\n\nMake sure GroqVoice.app is in /Applications, or toggle it manually in System Settings → General → Login Items."
+            alert.runModal()
         }
     }
 

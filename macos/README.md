@@ -6,11 +6,19 @@
 
 Swift + AppKit, без зависимостей. Бинарник ~300 KB.
 
-## Сборка
+## Установка (готовый билд)
 
 ```bash
-./build-app.sh
-# результат: GroqVoice.app в корне репозитория
+curl -fsSL https://raw.githubusercontent.com/abirzgals/GroqVoice/main/macos/install.sh | bash
+```
+
+Скачивает [GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip) (universal: Apple Silicon + Intel), ставит в /Applications, снимает quarantine и запускает. Дальше только yes/yes на промпты разрешений.
+
+## Сборка из исходников
+
+```bash
+./build-app.sh            # нативная архитектура → GroqVoice.app
+./build-app.sh --zip      # universal (arm64+x86_64) + GroqVoice-mac.zip
 mv GroqVoice.app /Applications/
 open /Applications/GroqVoice.app
 ```
@@ -53,6 +61,7 @@ Set API Key, Open Config / Vocabulary / Log, Launch at Login, Quit.
   "chatModels": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
   ```
 - `vocabulary.txt` — словарь редких слов/имён для биаса Whisper, hot-reload по mtime, лимит ~700 символов
+- `snippets.txt` — голосовые шорткаты для task-режима (`команда = текст или инструкция`). Говоришь «задание напиши мою рабочую почту» — вставляется значение из таблички; матчинг фаззи (делает LLM), правая часть может быть и инструкцией («переведи = переведи на английский, выведи только перевод»). Hot-reload, открывается через Tray → Open Snippets
 - `log.txt` — лог с ротацией на 1 MB
 - `last.wav` — последняя запись для отладки (`"saveLastWav": false` чтобы отключить)
 

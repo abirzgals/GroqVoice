@@ -1,18 +1,47 @@
 #!/bin/bash
 # Builds GroqVoice.app (release, ad-hoc signed) into the repo root.
+#   ./build-app.sh              native arch (fast, for local use)
+#   ./build-app.sh --universal  arm64 + x86_64 (for distribution)
+#   ./build-app.sh --zip        universal + GroqVoice-mac.zip release artifact
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
+UNIVERSAL=0
+MAKE_ZIP=0
+for arg in "$@"; do
+  case "$arg" in
+    --universal) UNIVERSAL=1 ;;
+    --zip) UNIVERSAL=1; MAKE_ZIP=1 ;;
+  esac
+done
+
+if [ "$UNIVERSAL" = 1 ]; then
+  # Per-arch builds + lipo: works with Command Line Tools alone
+  # (swift build --arch … needs full Xcode).
+  swift build -c release --triple arm64-apple-macosx13.0
+  swift build -c release --triple x86_64-apple-macosx13.0
+  BIN=.build/GroqVoice-universal
+  lipo -create -output "$BIN" \
+    .build/arm64-apple-macosx/release/GroqVoice \
+    .build/x86_64-apple-macosx/release/GroqVoice
+else
+  swift build -c release
+  BIN=.build/release/GroqVoice
+fi
 
 APP=GroqVoice.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp .build/release/GroqVoice "$APP/Contents/MacOS/GroqVoice"
+cp "$BIN" "$APP/Contents/MacOS/GroqVoice"
 cp Info.plist "$APP/Contents/Info.plist"
 
 codesign --force --sign - "$APP"
 
 echo
-echo "Built: $(pwd)/$APP"
-echo "Move it to /Applications and launch it."
+echo "Built: $(pwd)/$APP ($(lipo -archs "$APP/Contents/MacOS/GroqVoice" 2>/dev/null || echo native))"
+
+if [ "$MAKE_ZIP" = 1 ]; then
+  rm -f GroqVoice-mac.zip
+  ditto -c -k --keepParent "$APP" GroqVoice-mac.zip
+  echo "Release artifact: $(pwd)/GroqVoice-mac.zip ($(du -h GroqVoice-mac.zip | cut -f1))"
+fi

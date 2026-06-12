@@ -13,17 +13,17 @@
 > Click any link above and the .exe starts downloading immediately — no need to dig through GitHub's UI.
 > **Windows SmartScreen** may warn the .exe is from an unidentified publisher (it isn't code-signed yet). Click **More info → Run anyway**.
 
-### 🍎 macOS
+### 🍎 macOS (Apple Silicon + Intel, macOS 13+)
 
-Нативная Mac-версия (Swift, menu bar, push-to-talk на **Fn/🌐**) живёт в папке [macos/](macos/). Собирается одной командой:
+Нативная Mac-версия (Swift, menu bar, push-to-talk на **Fn/🌐**). Установка одной командой в Terminal:
 
 ```bash
-git clone https://github.com/abirzgals/GroqVoice.git
-cd GroqVoice/macos
-./build-app.sh    # → GroqVoice.app (нужен только Xcode Command Line Tools)
+curl -fsSL https://raw.githubusercontent.com/abirzgals/GroqVoice/main/macos/install.sh | bash
 ```
 
-Подробности — в [macos/README.md](macos/README.md).
+Или вручную: **[GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip)** *(200 KB, universal)* — распакуй, `xattr -cr GroqVoice.app`, перенеси в /Applications. При первом запуске разреши Microphone и Accessibility (промпты откроются сами) и вставь Groq API-ключ.
+
+Сборка из исходников и подробности — в [macos/README.md](macos/README.md). Страница загрузки: **[abirzgals.github.io/GroqVoice](https://abirzgals.github.io/GroqVoice/)**
 
 ---
 

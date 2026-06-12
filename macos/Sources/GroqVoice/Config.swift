@@ -16,6 +16,7 @@ struct Config: Codable {
     var taskSystemPrompt = ""
     var pttHoldMs = 250.0
     var doubleTapWindowMs = 400.0
+    var autostart = true
 
     static var supportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -31,7 +32,7 @@ struct Config: Codable {
         case taskKeywords, taskKeywordMaxWordPosition
         case minRecordingSeconds, silencePeakPercent
         case saveLastWav, playFeedbackSounds, taskSystemPrompt
-        case pttHoldMs, doubleTapWindowMs
+        case pttHoldMs, doubleTapWindowMs, autostart
         // Legacy single-model keys, migrated to the list fields on load.
         case transcriptionModel, chatModel
     }
@@ -65,6 +66,7 @@ struct Config: Codable {
         taskSystemPrompt = try c.decodeIfPresent(String.self, forKey: .taskSystemPrompt) ?? d.taskSystemPrompt
         pttHoldMs = try c.decodeIfPresent(Double.self, forKey: .pttHoldMs) ?? d.pttHoldMs
         doubleTapWindowMs = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindowMs) ?? d.doubleTapWindowMs
+        autostart = try c.decodeIfPresent(Bool.self, forKey: .autostart) ?? d.autostart
     }
 
     func encode(to encoder: Encoder) throws {
@@ -82,6 +84,7 @@ struct Config: Codable {
         try c.encode(taskSystemPrompt, forKey: .taskSystemPrompt)
         try c.encode(pttHoldMs, forKey: .pttHoldMs)
         try c.encode(doubleTapWindowMs, forKey: .doubleTapWindowMs)
+        try c.encode(autostart, forKey: .autostart)
     }
 
     static func load() -> Config {
