@@ -67,9 +67,12 @@ final class LocalSTT {
 
     func transcribe(wavPath: String, language: String) async throws -> String {
         let pipe = try await ensureLoaded()
+        // Unlike the Groq API, WhisperKit does NOT auto-detect language by
+        // default — with no language it force-feeds the <|en|> token.
         let options = DecodingOptions(
             task: .transcribe,
-            language: language.isEmpty ? nil : language
+            language: language.isEmpty ? nil : language,
+            detectLanguage: language.isEmpty
         )
         let results: [TranscriptionResult] = try await pipe.transcribe(audioPath: wavPath, decodeOptions: options)
         scheduleUnload()

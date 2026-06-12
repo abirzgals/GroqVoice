@@ -348,6 +348,23 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Log", action: #selector(menuOpenLog), keyEquivalent: ""))
         menu.addItem(.separator())
 
+        let langMenu = NSMenu()
+        let languages: [(String, String)] = [
+            ("Auto-detect", ""), ("Русский", "ru"), ("English", "en"),
+            ("Latviešu", "lv"), ("Українська", "uk"), ("Deutsch", "de"),
+            ("Español", "es"), ("Français", "fr"), ("Italiano", "it"), ("Polski", "pl"),
+        ]
+        for (title, code) in languages {
+            let item = NSMenuItem(title: title, action: #selector(menuSetLanguage(_:)), keyEquivalent: "")
+            item.representedObject = code
+            item.state = config.language == code ? .on : .off
+            item.target = self
+            langMenu.addItem(item)
+        }
+        let langRoot = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
+        menu.addItem(langRoot)
+        menu.setSubmenu(langMenu, for: langRoot)
+
         let localMenu = NSMenu()
         for (title, mode) in [("Off (Groq only)", "off"), ("Fallback when offline", "fallback"), ("Always local", "always")] {
             let item = NSMenuItem(title: title, action: #selector(menuSetLocalMode(_:)), keyEquivalent: "")
@@ -427,6 +444,14 @@ final class AppController: NSObject, NSApplicationDelegate {
             alert.informativeText = "macOS rejected the Login Item change: \(error.localizedDescription)\n\nMake sure GroqVoice.app is in /Applications, or toggle it manually in System Settings → General → Login Items."
             alert.runModal()
         }
+    }
+
+    @objc private func menuSetLanguage(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String else { return }
+        config.language = code
+        config.save()
+        sender.menu?.items.forEach { $0.state = ($0.representedObject as? String) == code ? .on : .off }
+        Log.write("language → \(code.isEmpty ? "auto" : code)")
     }
 
     @objc private func menuSetLocalMode(_ sender: NSMenuItem) {
