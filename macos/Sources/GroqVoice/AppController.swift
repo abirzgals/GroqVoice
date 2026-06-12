@@ -1,5 +1,6 @@
 import AVFoundation
 import Cocoa
+import Network
 import ServiceManagement
 
 final class AppController: NSObject, NSApplicationDelegate {
@@ -21,7 +22,11 @@ final class AppController: NSObject, NSApplicationDelegate {
     private lazy var groq = GroqClient(apiKey: config.groqApiKey,
                                        transcriptionModels: config.transcriptionModels,
                                        chatModels: config.chatModels)
+    private lazy var localSTT = LocalSTT(model: config.localWhisperModel,
+                                         unloadAfterMinutes: config.localUnloadAfterMinutes)
     private let hotkey = HotkeyMonitor()
+    private let netMonitor = NWPathMonitor()
+    private var isOnline = true
 
     private var phase: Phase = .idle
     private var fnDownAt: Date?
@@ -40,6 +45,17 @@ final class AppController: NSObject, NSApplicationDelegate {
         requestMicAccess()
         startHotkeyWhenTrusted()
         syncAutostart()
+
+        netMonitor.pathUpdateHandler = { [weak self] path in
+            let online = path.status == .satisfied
+            DispatchQueue.main.async {
+                if self?.isOnline != online {
+                    Log.write("network: \(online ? "online" : "offline")")
+                }
+                self?.isOnline = online
+            }
+        }
+        netMonitor.start(queue: DispatchQueue(label: "groqvoice.net"))
 
         if config.groqApiKey.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.promptForApiKey(firstRun: true) }
@@ -204,14 +220,12 @@ final class AppController: NSObject, NSApplicationDelegate {
             discardRecording(reason: "silence (peak < \(config.silencePeakPercent)%)")
             return
         }
-        if config.groqApiKey.isEmpty {
+        let useLocalOnly = config.localMode == "always"
+        if config.groqApiKey.isEmpty && !useLocalOnly {
             phase = .idle
             setIcon(.noKey)
             promptForApiKey(firstRun: false)
             return
-        }
-        if !config.saveLastWav {
-            try? FileManager.default.removeItem(at: Recorder.wavURL)
         }
 
         phase = .processing
@@ -220,12 +234,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         let cfg = config
         let vocabPrompt = vocabulary.prompt()
         let wav = result.data
+        let online = isOnline
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                let transcript = try await self.groq.transcribe(
-                    wav: wav, language: cfg.language, prompt: vocabPrompt)
+                let transcript = try await self.obtainTranscript(
+                    wav: wav, cfg: cfg, vocabPrompt: vocabPrompt, online: online)
                 Log.write("STT result: \"\(transcript)\"")
 
                 let output: String
@@ -235,7 +250,8 @@ final class AppController: NSObject, NSApplicationDelegate {
                     Log.write("task mode → chat: \"\(query)\"")
                     let base = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
                     let system = base + self.snippets.systemPromptSection()
-                    output = try await self.groq.chat(userText: query, systemPrompt: system)
+                    output = try await self.obtainChatAnswer(
+                        query: query, system: system, cfg: cfg, online: online) ?? transcript
                     Log.write("chat result: \"\(output.prefix(200))\"")
                 } else {
                     output = transcript
@@ -243,17 +259,68 @@ final class AppController: NSObject, NSApplicationDelegate {
 
                 await MainActor.run {
                     if !output.isEmpty { Paster.paste(output) }
-                    self.phase = .idle
-                    self.setIcon(.ready)
+                    self.finishProcessing(cfg: cfg)
                 }
             } catch {
                 Log.write("error: \(error.localizedDescription)")
-                await MainActor.run {
-                    self.phase = .idle
-                    self.setIcon(.ready)
-                }
+                await MainActor.run { self.finishProcessing(cfg: cfg) }
             }
         }
+    }
+
+    private func finishProcessing(cfg: Config) {
+        if !cfg.saveLastWav {
+            try? FileManager.default.removeItem(at: Recorder.wavURL)
+        }
+        phase = .idle
+        setIcon(.ready)
+    }
+
+    /// STT routing: local-only mode → WhisperKit; otherwise Groq with a fall
+    /// back to the local model (if it's already downloaded) when offline or
+    /// when every Groq model fails.
+    private func obtainTranscript(wav: Data, cfg: Config, vocabPrompt: String, online: Bool) async throws -> String {
+        let wavPath = Recorder.wavURL.path
+
+        if cfg.localMode == "always" {
+            return try await localSTT.transcribe(wavPath: wavPath, language: cfg.language)
+        }
+
+        let canFallBack = cfg.localMode == "fallback" && localSTT.isModelDownloaded
+        if !online && canFallBack {
+            Log.write("STT: offline → local Whisper")
+            return try await localSTT.transcribe(wavPath: wavPath, language: cfg.language)
+        }
+
+        do {
+            return try await groq.transcribe(wav: wav, language: cfg.language, prompt: vocabPrompt)
+        } catch where canFallBack {
+            Log.write("STT: Groq failed (\(error.localizedDescription.prefix(120))) → local Whisper")
+            return try await localSTT.transcribe(wavPath: wavPath, language: cfg.language)
+        }
+    }
+
+    /// Chat routing: Groq, falling back to Apple's on-device model when
+    /// offline/unreachable. Returns nil if no backend produced an answer.
+    private func obtainChatAnswer(query: String, system: String, cfg: Config, online: Bool) async -> String? {
+        let preferLocal = cfg.localMode == "always" || (!online && cfg.localMode == "fallback")
+
+        if !preferLocal {
+            do {
+                return try await groq.chat(userText: query, systemPrompt: system)
+            } catch {
+                Log.write("chat: Groq failed (\(error.localizedDescription.prefix(120)))")
+            }
+        }
+        if LocalLLM.isAvailable {
+            do {
+                Log.write("chat: using Apple on-device model")
+                return try await LocalLLM.respond(system: system, user: query)
+            } catch {
+                Log.write("chat: local model failed: \(error.localizedDescription)")
+            }
+        }
+        return nil
     }
 
     private func playSound(_ name: String) {
@@ -265,7 +332,10 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.menu = makeMenu()
+    }
 
+    private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         let header = NSMenuItem(title: "GroqVoice — hold Fn to talk", action: nil, keyEquivalent: "")
         header.isEnabled = false
@@ -277,6 +347,26 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Snippets", action: #selector(menuOpenSnippets), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Log", action: #selector(menuOpenLog), keyEquivalent: ""))
         menu.addItem(.separator())
+
+        let localMenu = NSMenu()
+        for (title, mode) in [("Off (Groq only)", "off"), ("Fallback when offline", "fallback"), ("Always local", "always")] {
+            let item = NSMenuItem(title: title, action: #selector(menuSetLocalMode(_:)), keyEquivalent: "")
+            item.representedObject = mode
+            item.state = config.localMode == mode ? .on : .off
+            item.target = self
+            localMenu.addItem(item)
+        }
+        localMenu.addItem(.separator())
+        let download = NSMenuItem(title: localSTT.isModelDownloaded ? "Local model: downloaded ✓" : "Download local model…",
+                                  action: localSTT.isModelDownloaded ? nil : #selector(menuDownloadModel),
+                                  keyEquivalent: "")
+        download.target = self
+        localMenu.addItem(download)
+        let localRoot = NSMenuItem(title: "Local Whisper", action: nil, keyEquivalent: "")
+        menu.addItem(localRoot)
+        menu.setSubmenu(localMenu, for: localRoot)
+
+        menu.addItem(.separator())
         let login = NSMenuItem(title: "Launch at Login", action: #selector(menuToggleLogin), keyEquivalent: "")
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
@@ -286,7 +376,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         for item in menu.items where item.action != nil {
             item.target = self
         }
-        statusItem.menu = menu
+        return menu
     }
 
     private func setIcon(_ state: IconState) {
@@ -336,6 +426,43 @@ final class AppController: NSObject, NSApplicationDelegate {
             alert.messageText = "Launch at Login failed"
             alert.informativeText = "macOS rejected the Login Item change: \(error.localizedDescription)\n\nMake sure GroqVoice.app is in /Applications, or toggle it manually in System Settings → General → Login Items."
             alert.runModal()
+        }
+    }
+
+    @objc private func menuSetLocalMode(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String else { return }
+        config.localMode = mode
+        config.save()
+        sender.menu?.items.forEach { $0.state = ($0.representedObject as? String) == mode ? .on : .off }
+        Log.write("local mode → \(mode)")
+        if mode == "always" && !localSTT.isModelDownloaded {
+            menuDownloadModel()
+        }
+    }
+
+    @objc private func menuDownloadModel() {
+        Log.write("local model download requested from menu")
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.localSTT.ensureLoaded()
+                await MainActor.run {
+                    self.statusItem.menu = self.makeMenu()  // refresh "downloaded ✓" state
+                    NSApp.activate(ignoringOtherApps: true)
+                    let alert = NSAlert()
+                    alert.messageText = "Local model ready"
+                    alert.informativeText = "Offline transcription is now available."
+                    alert.runModal()
+                }
+            } catch {
+                await MainActor.run {
+                    NSApp.activate(ignoringOtherApps: true)
+                    let alert = NSAlert()
+                    alert.messageText = "Model download failed"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
+            }
         }
     }
 

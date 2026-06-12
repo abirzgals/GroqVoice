@@ -44,9 +44,21 @@ open /Applications/GroqVoice.app
 
 Граница «тап»/«hold» — 250 мс (`pttHoldMs`), окно двойного тапа — 400 мс (`doubleTapWindowMs`).
 
+## Локальный режим (offline)
+
+Tray → **Local Whisper**:
+
+- **Off (Groq only)** — всё через облако
+- **Fallback when offline** *(по умолчанию)* — обычно Groq, но если сети нет или все Groq-модели упали по лимитам, транскрипция идёт через локальный Whisper (WhisperKit / CoreML на Neural Engine). Включается только если модель уже скачана — жми **Download local model…** один раз (по умолчанию `large-v3-turbo` quantized, ~626 MB с Hugging Face; имя настраивается через `localWhisperModel`, список — [argmaxinc/whisperkit-coreml](https://huggingface.co/argmaxinc/whisperkit-coreml))
+- **Always local** — без интернета вообще: STT локально, task-режим через встроенную модель Apple Intelligence (macOS 26+, Foundation Models, ноль скачиваний)
+
+Модель загружается в память лениво при первом использовании и выгружается после простоя (`localUnloadAfterMinutes`, по умолчанию 10 мин) — память не занята, пока не диктуешь.
+
+Headless-проверка/предзагрузка: `GroqVoice.app/Contents/MacOS/GroqVoice --download-model`
+
 ## Меню (right-click / click иконки)
 
-Set API Key, Open Config / Vocabulary / Log, Launch at Login, Quit.
+Set API Key, Open Config / Vocabulary / Snippets / Log, Local Whisper, Launch at Login, Quit.
 
 ## Файлы
 

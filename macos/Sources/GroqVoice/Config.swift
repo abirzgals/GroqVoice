@@ -17,6 +17,13 @@ struct Config: Codable {
     var pttHoldMs = 250.0
     var doubleTapWindowMs = 400.0
     var autostart = true
+    /// "off" — Groq only; "fallback" — local Whisper when offline/Groq fails
+    /// (only if the model is already downloaded); "always" — fully local.
+    var localMode = "fallback"
+    /// WhisperKit model name; "" = auto-pick recommended for this Mac.
+    /// Default: quantized large-v3-turbo — best RU/EN quality per MB (~626 MB).
+    var localWhisperModel = "openai_whisper-large-v3-v20240930_626MB"
+    var localUnloadAfterMinutes = 10.0
 
     static var supportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -33,6 +40,7 @@ struct Config: Codable {
         case minRecordingSeconds, silencePeakPercent
         case saveLastWav, playFeedbackSounds, taskSystemPrompt
         case pttHoldMs, doubleTapWindowMs, autostart
+        case localMode, localWhisperModel, localUnloadAfterMinutes
         // Legacy single-model keys, migrated to the list fields on load.
         case transcriptionModel, chatModel
     }
@@ -67,6 +75,9 @@ struct Config: Codable {
         pttHoldMs = try c.decodeIfPresent(Double.self, forKey: .pttHoldMs) ?? d.pttHoldMs
         doubleTapWindowMs = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindowMs) ?? d.doubleTapWindowMs
         autostart = try c.decodeIfPresent(Bool.self, forKey: .autostart) ?? d.autostart
+        localMode = try c.decodeIfPresent(String.self, forKey: .localMode) ?? d.localMode
+        localWhisperModel = try c.decodeIfPresent(String.self, forKey: .localWhisperModel) ?? d.localWhisperModel
+        localUnloadAfterMinutes = try c.decodeIfPresent(Double.self, forKey: .localUnloadAfterMinutes) ?? d.localUnloadAfterMinutes
     }
 
     func encode(to encoder: Encoder) throws {
@@ -85,6 +96,9 @@ struct Config: Codable {
         try c.encode(pttHoldMs, forKey: .pttHoldMs)
         try c.encode(doubleTapWindowMs, forKey: .doubleTapWindowMs)
         try c.encode(autostart, forKey: .autostart)
+        try c.encode(localMode, forKey: .localMode)
+        try c.encode(localWhisperModel, forKey: .localWhisperModel)
+        try c.encode(localUnloadAfterMinutes, forKey: .localUnloadAfterMinutes)
     }
 
     static func load() -> Config {
