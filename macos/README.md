@@ -58,7 +58,7 @@ Headless-проверка/предзагрузка: `GroqVoice.app/Contents/MacO
 
 ## Меню (right-click / click иконки)
 
-Set API Key, Open Config / Vocabulary / Snippets / Log, Local Whisper, Launch at Login, Quit.
+Set API Key, Open Config / Vocabulary / Snippets / Log, **Language** (Auto-detect по умолчанию или фиксированный язык распознавания — действует и на Groq, и на локальный Whisper), Local Whisper, Launch at Login, Quit.
 
 ## Файлы
 
