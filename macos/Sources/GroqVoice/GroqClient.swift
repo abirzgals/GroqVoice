@@ -83,6 +83,37 @@ final class GroqClient {
         throw lastError ?? GroqError(status: 0, body: "no models configured", retryAfter: nil)
     }
 
+    // MARK: - Networking with transient-error retry
+
+    /// URLSession reuses pooled HTTP/2 connections; Groq closes idle ones, so a
+    /// request can hit a dead socket and throw "network connection lost". These
+    /// errors are spurious — a retry opens a fresh connection and succeeds.
+    /// Retrying here avoids falling back to local Whisper on a healthy network.
+    private static func isTransient(_ error: URLError) -> Bool {
+        switch error.code {
+        case .networkConnectionLost, .timedOut, .cannotConnectToHost,
+             .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed,
+             .resourceUnavailable, .badServerResponse:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func send(_ req: URLRequest, uploading body: Data? = nil, maxRetries: Int = 2) async throws -> (Data, URLResponse) {
+        var attempt = 0
+        while true {
+            do {
+                if let body { return try await URLSession.shared.upload(for: req, from: body) }
+                return try await URLSession.shared.data(for: req)
+            } catch let e as URLError where Self.isTransient(e) && attempt < maxRetries {
+                attempt += 1
+                Log.write("Groq: transient network error (\(e.code.rawValue)), retry \(attempt)/\(maxRetries)")
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 400_000_000)
+            }
+        }
+    }
+
     // MARK: - Single-model calls
 
     private func transcribeOnce(wav: Data, model: String, language: String, prompt: String) async throws -> String {
@@ -111,7 +142,7 @@ final class GroqClient {
         body.append(wav)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
-        let (data, resp) = try await URLSession.shared.upload(for: req, from: body)
+        let (data, resp) = try await send(req, uploading: body)
         let http = resp as? HTTPURLResponse
         let status = http?.statusCode ?? 0
         guard status == 200 else {
@@ -141,7 +172,7 @@ final class GroqClient {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await send(req)
         let http = resp as? HTTPURLResponse
         let status = http?.statusCode ?? 0
         guard status == 200 else {
