@@ -46,6 +46,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         startHotkeyWhenTrusted()
         syncAutostart()
 
+        localSTT.onStage = { [weak self] stage in
+            DispatchQueue.main.async { self?.showLocalStage(stage) }
+        }
+
         netMonitor.pathUpdateHandler = { [weak self] path in
             let online = path.status == .satisfied
             DispatchQueue.main.async {
@@ -411,6 +415,22 @@ final class AppController: NSObject, NSApplicationDelegate {
         image?.isTemplate = (tint == nil)
         button.image = image
         button.contentTintColor = tint
+        // Clear any local-transcription progress label from a previous run.
+        button.title = ""
+        button.imagePosition = .imageOnly
+    }
+
+    /// Shows on-device transcription progress next to the menu-bar icon:
+    /// "⋯" while the model loads, then "NN%" as it transcribes.
+    private func showLocalStage(_ stage: LocalSTT.Stage) {
+        guard let button = statusItem.button, case .processing = phase else { return }
+        button.imagePosition = .imageLeft
+        switch stage {
+        case .loadingModel:
+            button.title = " ⋯"
+        case .transcribing(let f):
+            button.title = String(format: " %d%%", max(0, min(100, Int(f * 100))))
+        }
     }
 
     // MARK: - Menu actions

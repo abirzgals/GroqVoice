@@ -6,8 +6,18 @@ import WhisperKit
 /// free memory. Fallback mode never downloads by itself — only an explicit
 /// "Download local model" (or "always" mode) triggers the download.
 final class LocalSTT {
+    /// Reported to the UI so the menu-bar icon can show progress. Only fires
+    /// during on-device transcription — the Groq path never emits these.
+    enum Stage {
+        case loadingModel
+        case transcribing(Double)  // 0...1
+    }
+
     static var modelsDir: URL { Config.supportDir.appendingPathComponent("models", isDirectory: true) }
     private static var markerURL: URL { modelsDir.appendingPathComponent("model-ready.txt") }
+
+    /// Called on the main thread with the current stage.
+    var onStage: ((Stage) -> Void)?
 
     private var whisper: WhisperKit?
     private var unloadTimer: Timer?
@@ -18,6 +28,10 @@ final class LocalSTT {
     init(model: String, unloadAfterMinutes: Double) {
         configuredModel = model
         unloadAfterSeconds = max(60, unloadAfterMinutes * 60)
+    }
+
+    private func emit(_ stage: Stage) {
+        DispatchQueue.main.async { [weak self] in self?.onStage?(stage) }
     }
 
     var isModelDownloaded: Bool {
@@ -32,6 +46,7 @@ final class LocalSTT {
         if let whisper { return whisper }
         if let loadTask { return try await loadTask.value }
 
+        emit(.loadingModel)
         let model = configuredModel
         let task = Task<WhisperKit, Error> {
             let downloaded = self.isModelDownloaded
@@ -74,7 +89,21 @@ final class LocalSTT {
             language: language.isEmpty ? nil : language,
             detectLanguage: language.isEmpty
         )
+
+        // Poll WhisperKit's Progress (advances as it seeks through the audio)
+        // and report percentage until transcription returns.
+        emit(.transcribing(0))
+        let poller = Task { [weak self] in
+            while !Task.isCancelled {
+                let f = pipe.progress.fractionCompleted
+                if f.isFinite { self?.emit(.transcribing(f)) }
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
+        }
+        defer { poller.cancel() }
+
         let results: [TranscriptionResult] = try await pipe.transcribe(audioPath: wavPath, decodeOptions: options)
+        emit(.transcribing(1))
         scheduleUnload()
         return results.map(\.text).joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
