@@ -238,13 +238,18 @@ final class AppController: NSObject, NSApplicationDelegate {
         let cfg = config
         let vocabPrompt = vocabulary.prompt()
         let wav = result.data
-        let online = isOnline
 
         Task { [weak self] in
             guard let self else { return }
             do {
+                // One fast preflight per utterance, only when a local fallback
+                // exists — decides cloud vs local without a slow upload timeout.
+                let reachable = (cfg.localMode == "fallback")
+                    ? await Reachability.canReach(host: "api.groq.com")
+                    : true
+
                 let transcript = try await self.obtainTranscript(
-                    wav: wav, cfg: cfg, vocabPrompt: vocabPrompt, online: online)
+                    wav: wav, cfg: cfg, vocabPrompt: vocabPrompt, reachable: reachable)
                 Log.write("STT result: \"\(transcript)\"")
 
                 let output: String
@@ -255,7 +260,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                     let base = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
                     let system = base + self.snippets.systemPromptSection()
                     output = try await self.obtainChatAnswer(
-                        query: query, system: system, cfg: cfg, online: online) ?? transcript
+                        query: query, system: system, cfg: cfg, reachable: reachable) ?? transcript
                     Log.write("chat result: \"\(output.prefix(200))\"")
                 } else {
                     output = transcript
@@ -281,9 +286,9 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     /// STT routing: local-only mode → WhisperKit; otherwise Groq with a fall
-    /// back to the local model (if it's already downloaded) when offline or
-    /// when every Groq model fails.
-    private func obtainTranscript(wav: Data, cfg: Config, vocabPrompt: String, online: Bool) async throws -> String {
+    /// back to the local model (if it's already downloaded) when the preflight
+    /// says Groq is unreachable or when every Groq model fails.
+    private func obtainTranscript(wav: Data, cfg: Config, vocabPrompt: String, reachable: Bool) async throws -> String {
         let wavPath = Recorder.wavURL.path
 
         if cfg.localMode == "always" {
@@ -291,8 +296,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
 
         let canFallBack = cfg.localMode == "fallback" && localSTT.isModelDownloaded
-        if !online && canFallBack {
-            Log.write("STT: offline → local Whisper")
+        if canFallBack && !reachable {
+            Log.write("STT: Groq not reachable (preflight) → local Whisper")
             return try await localSTT.transcribe(wavPath: wavPath, language: cfg.language)
         }
 
@@ -304,10 +309,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Chat routing: Groq, falling back to Apple's on-device model when
-    /// offline/unreachable. Returns nil if no backend produced an answer.
-    private func obtainChatAnswer(query: String, system: String, cfg: Config, online: Bool) async -> String? {
-        let preferLocal = cfg.localMode == "always" || (!online && cfg.localMode == "fallback")
+    /// Chat routing: Groq, falling back to Apple's on-device model when the
+    /// preflight says Groq is unreachable. Returns nil if no backend answered.
+    private func obtainChatAnswer(query: String, system: String, cfg: Config, reachable: Bool) async -> String? {
+        let preferLocal = cfg.localMode == "always" || (cfg.localMode == "fallback" && !reachable)
 
         if !preferLocal {
             do {

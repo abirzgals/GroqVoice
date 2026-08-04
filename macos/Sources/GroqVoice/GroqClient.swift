@@ -122,6 +122,7 @@ final class GroqClient {
         req.httpMethod = "POST"
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
+        req.timeoutInterval = 25  // backstop: don't hang if the link dies mid-upload
         let boundary = "GroqVoice-\(UUID().uuidString)"
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
@@ -161,6 +162,7 @@ final class GroqClient {
         req.httpMethod = "POST"
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 25  // backstop: don't hang if the link dies mid-request
 
         let payload: [String: Any] = [
             "model": model,

@@ -8,7 +8,7 @@ struct Config: Codable {
     var chatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
     var language = ""
     var taskKeywords = ["task", "задача", "задание"]
-    var taskKeywordMaxWordPosition = 4
+    var taskKeywordMaxWordPosition = 1
     var minRecordingSeconds = 1.0
     var silencePeakPercent = 1.0
     var saveLastWav = true
@@ -23,7 +23,7 @@ struct Config: Codable {
     /// WhisperKit model name; "" = auto-pick recommended for this Mac.
     /// Default: quantized large-v3-turbo — best RU/EN quality per MB (~626 MB).
     var localWhisperModel = "openai_whisper-large-v3-v20240930_626MB"
-    var localUnloadAfterMinutes = 10.0
+    var localUnloadAfterMinutes = 120.0
 
     static var supportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
