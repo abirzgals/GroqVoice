@@ -34,6 +34,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var chordCancelled = false
     private var ignoreNextFnUp = false
     private var accessibilityRetryTimer: Timer?
+    private var animationTimer: Timer?
+    private var spinnerAngle: CGFloat = 90
 
     // MARK: - Lifecycle
 
@@ -406,6 +408,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func setIcon(_ state: IconState) {
+        stopSpinner()
         guard let button = statusItem.button else { return }
         let (symbol, tint): (String, NSColor?) = {
             switch state {
@@ -420,22 +423,47 @@ final class AppController: NSObject, NSApplicationDelegate {
         image?.isTemplate = (tint == nil)
         button.image = image
         button.contentTintColor = tint
-        // Clear any local-transcription progress label from a previous run.
         button.title = ""
         button.imagePosition = .imageOnly
     }
 
-    /// Shows on-device transcription progress next to the menu-bar icon:
-    /// "⋯" while the model loads, then "NN%" as it transcribes.
+    /// Reflects on-device work in the menu-bar icon as a drawn ring/spinner:
+    /// a filling ring for the model download (real %), a rotating arc while the
+    /// model compiles/prewarms, and a filling ring as transcription proceeds.
     private func showLocalStage(_ stage: LocalSTT.Stage) {
-        guard let button = statusItem.button, case .processing = phase else { return }
-        button.imagePosition = .imageLeft
+        guard let button = statusItem.button else { return }
+        if case .recording = phase { return }  // don't cover the red recording dot
+        button.contentTintColor = nil
+        button.title = ""
+        button.imagePosition = .imageOnly
+
         switch stage {
+        case .downloadingModel(let f):
+            stopSpinner()
+            button.image = ProgressIcon.ring(fraction: f, color: .controlAccentColor)
         case .loadingModel:
-            button.title = " ⋯"
+            startSpinner()
         case .transcribing(let f):
-            button.title = String(format: " %d%%", max(0, min(100, Int(f * 100))))
+            stopSpinner()
+            button.image = ProgressIcon.ring(fraction: max(0.04, f), color: .systemGreen)
         }
+    }
+
+    private func startSpinner() {
+        guard animationTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 15.0, repeats: true) { [weak self] _ in
+            guard let self, let button = self.statusItem.button else { return }
+            self.spinnerAngle -= 24
+            button.imagePosition = .imageOnly
+            button.image = ProgressIcon.spinner(angle: self.spinnerAngle, color: .controlAccentColor)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        animationTimer = timer
+    }
+
+    private func stopSpinner() {
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
 
     // MARK: - Menu actions
@@ -497,6 +525,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             do {
                 try await self.localSTT.ensureLoaded()
                 await MainActor.run {
+                    self.setIcon(self.config.groqApiKey.isEmpty ? .noKey : .ready)  // stop spinner/ring
                     self.statusItem.menu = self.makeMenu()  // refresh "downloaded ✓" state
                     NSApp.activate(ignoringOtherApps: true)
                     let alert = NSAlert()
@@ -506,6 +535,7 @@ final class AppController: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 await MainActor.run {
+                    self.setIcon(self.config.groqApiKey.isEmpty ? .noKey : .ready)
                     NSApp.activate(ignoringOtherApps: true)
                     let alert = NSAlert()
                     alert.messageText = "Model download failed"

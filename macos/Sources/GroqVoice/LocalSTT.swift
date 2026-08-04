@@ -9,8 +9,9 @@ final class LocalSTT {
     /// Reported to the UI so the menu-bar icon can show progress. Only fires
     /// during on-device transcription — the Groq path never emits these.
     enum Stage {
-        case loadingModel
-        case transcribing(Double)  // 0...1
+        case downloadingModel(Double)  // 0...1 — real Hugging Face download progress
+        case loadingModel              // indeterminate — CoreML compile + prewarm
+        case transcribing(Double)      // 0...1
     }
 
     static var modelsDir: URL { Config.supportDir.appendingPathComponent("models", isDirectory: true) }
@@ -46,15 +47,33 @@ final class LocalSTT {
         if let whisper { return whisper }
         if let loadTask { return try await loadTask.value }
 
-        emit(.loadingModel)
         let model = configuredModel
         let task = Task<WhisperKit, Error> {
-            let downloaded = self.isModelDownloaded
-            Log.write("local STT: \(downloaded ? "loading" : "downloading + loading") model\(model.isEmpty ? " (auto)" : " \(model)")…")
             let started = Date()
+            let variant = model.isEmpty ? WhisperKit.recommendedModels().default : model
+
+            // 1) Ensure the model is on disk, reporting real download progress.
+            var downloadedFolder: URL?
+            if !self.isModelDownloaded {
+                Log.write("local STT: downloading model \(variant)…")
+                self.emit(.downloadingModel(0))
+                downloadedFolder = try await WhisperKit.download(
+                    variant: variant,
+                    downloadBase: LocalSTT.modelsDir
+                ) { progress in
+                    let f = progress.fractionCompleted
+                    if f.isFinite { self.emit(.downloadingModel(f)) }
+                }
+                Log.write(String(format: "local STT: downloaded in %.1fs", Date().timeIntervalSince(started)))
+            }
+
+            // 2) Compile + prewarm into memory (no fine-grained progress available).
+            self.emit(.loadingModel)
+            Log.write("local STT: loading model \(variant)…")
             let cfg = WhisperKitConfig(
                 model: model.isEmpty ? nil : model,
                 downloadBase: LocalSTT.modelsDir,
+                modelFolder: downloadedFolder?.path,
                 verbose: false,
                 logLevel: .error,
                 prewarm: true,
@@ -62,7 +81,7 @@ final class LocalSTT {
                 download: true
             )
             let pipe = try await WhisperKit(cfg)
-            let name = pipe.modelFolder?.lastPathComponent ?? (model.isEmpty ? "auto" : model)
+            let name = pipe.modelFolder?.lastPathComponent ?? variant
             try? name.data(using: .utf8)!.write(to: LocalSTT.markerURL)
             Log.write(String(format: "local STT: model %@ ready in %.1fs", name, Date().timeIntervalSince(started)))
             return pipe
