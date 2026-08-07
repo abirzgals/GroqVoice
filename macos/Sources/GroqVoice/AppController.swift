@@ -244,11 +244,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             do {
-                // One fast preflight per utterance, only when a local fallback
-                // exists — decides cloud vs local without a slow upload timeout.
-                let reachable = (cfg.localMode == "fallback")
-                    ? await Reachability.canReach(host: "api.groq.com")
-                    : true
+                // One fast preflight per utterance (skipped only in Groq-only
+                // mode, where routing can't change) — decides cloud vs local
+                // without waiting out a slow upload timeout.
+                let reachable = (cfg.localMode == "off")
+                    ? true
+                    : await Reachability.canReach(host: "api.groq.com")
 
                 let transcript = try await self.obtainTranscript(
                     wav: wav, cfg: cfg, vocabPrompt: vocabPrompt, reachable: reachable)
@@ -261,9 +262,18 @@ final class AppController: NSObject, NSApplicationDelegate {
                     Log.write("task mode → chat: \"\(query)\"")
                     let base = cfg.taskSystemPrompt.isEmpty ? TaskRouter.defaultSystemPrompt : cfg.taskSystemPrompt
                     let system = base + self.snippets.systemPromptSection()
-                    output = try await self.obtainChatAnswer(
-                        query: query, system: system, cfg: cfg, reachable: reachable) ?? transcript
-                    Log.write("chat result: \"\(output.prefix(200))\"")
+                    let answer = await self.obtainChatAnswer(
+                        query: query, system: system, cfg: cfg, reachable: reachable)
+                    if let answer, !answer.isEmpty {
+                        output = answer
+                        Log.write("chat result: \"\(output.prefix(200))\"")
+                    } else {
+                        // A task was recognized but no LLM could run it. Never paste
+                        // the raw "задание …" transcript — that's just noise.
+                        output = ""
+                        Log.write("task mode: no LLM backend produced an answer — nothing pasted")
+                        await MainActor.run { self.playSound("Basso") }
+                    }
                 } else {
                     output = transcript
                 }
@@ -311,12 +321,13 @@ final class AppController: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Chat routing: Groq, falling back to Apple's on-device model when the
-    /// preflight says Groq is unreachable. Returns nil if no backend answered.
+    /// Chat routing for task mode. A task needs a capable LLM, so Groq is
+    /// preferred whenever reachable (higher quality, and the only option on Macs
+    /// without Apple Intelligence) — even in "always local" mode, which governs
+    /// STT privacy, not task execution. Apple's on-device model is used only
+    /// when Groq is unreachable. Returns nil if no backend answered.
     private func obtainChatAnswer(query: String, system: String, cfg: Config, reachable: Bool) async -> String? {
-        let preferLocal = cfg.localMode == "always" || (cfg.localMode == "fallback" && !reachable)
-
-        if !preferLocal {
+        if reachable {
             do {
                 return try await groq.chat(userText: query, systemPrompt: system)
             } catch {
@@ -329,6 +340,15 @@ final class AppController: NSObject, NSApplicationDelegate {
                 return try await LocalLLM.respond(system: system, user: query)
             } catch {
                 Log.write("chat: local model failed: \(error.localizedDescription)")
+            }
+        }
+        // Preflight said unreachable and there's no local LLM — try Groq anyway
+        // as a last resort (the probe may have been a transient false negative).
+        if !reachable {
+            do {
+                return try await groq.chat(userText: query, systemPrompt: system)
+            } catch {
+                Log.write("chat: Groq last-resort failed (\(error.localizedDescription.prefix(120)))")
             }
         }
         return nil

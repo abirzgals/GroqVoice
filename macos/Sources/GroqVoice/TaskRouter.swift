@@ -19,22 +19,36 @@ enum TaskRouter {
     clarifying questions, do not add notes or sign-offs — output only the text to paste.
     """
 
-    /// Task mode triggers ONLY when the transcript's FIRST word is a task keyword
-    /// (e.g. "задание переведи …"). This is deliberately strict: a keyword that
-    /// merely appears mid-sentence ("а если задание, то…") must NOT be executed —
-    /// it is plain dictation and should be transcribed verbatim.
+    /// Imperative words that may precede a task keyword and still form a command,
+    /// e.g. "выполни задание …", "please do task …". Anything else before the
+    /// keyword means it's ordinary speech, not a command.
+    static let commandLeadIns: Set<String> = [
+        "выполни", "выполнить", "сделай", "сделать", "запусти", "запустить",
+        "дай", "пожалуйста",
+        "do", "run", "execute", "perform", "make", "please",
+    ]
+
+    /// Task mode triggers when a keyword ("задание"/"task"/…) appears at the start,
+    /// optionally after imperative lead-in words ("выполни задание …"). It does NOT
+    /// trigger when the keyword merely appears inside a normal sentence
+    /// ("а если задание, то…") — that stays plain dictation, transcribed verbatim.
     ///
-    /// `maxPosition` bounds how many leading words may be scanned (default 1 = the
-    /// first word only); raise it in config to allow a short lead-in before the keyword.
-    /// Returns the command text after the keyword, or nil if this isn't a task.
+    /// `maxPosition` bounds how many leading words are scanned. Returns the command
+    /// text after the keyword, or nil if this isn't a task.
     static func taskQuery(from transcript: String, keywords: [String], maxPosition: Int) -> String? {
         let words = transcript.split(whereSeparator: { $0.isWhitespace })
-        let lowered = keywords.map { $0.lowercased() }
+        let lowered = Set(keywords.map { $0.lowercased() })
         let scan = max(1, maxPosition)
 
+        func clean(_ s: Substring) -> String {
+            s.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        }
+
         for (i, word) in words.prefix(scan).enumerated() {
-            let clean = word.trimmingCharacters(in: .punctuationCharacters).lowercased()
-            guard lowered.contains(clean) else { continue }
+            guard lowered.contains(clean(word)) else { continue }
+            // Command only if every word before the keyword is a lead-in.
+            let preceding = words.prefix(i).map(clean)
+            guard preceding.allSatisfy({ commandLeadIns.contains($0) }) else { continue }
 
             let rest = words.dropFirst(i + 1).joined(separator: " ")
             let trimmed = rest.trimmingCharacters(in: CharacterSet(charactersIn: " \t:,.—–-"))

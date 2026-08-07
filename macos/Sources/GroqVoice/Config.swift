@@ -8,7 +8,7 @@ struct Config: Codable {
     var chatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
     var language = ""
     var taskKeywords = ["task", "задача", "задание"]
-    var taskKeywordMaxWordPosition = 1
+    var taskKeywordMaxWordPosition = 3
     var minRecordingSeconds = 1.0
     var silencePeakPercent = 1.0
     var saveLastWav = true
