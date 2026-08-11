@@ -6,7 +6,8 @@ import Cocoa
 final class HotkeyMonitor {
     var onFnDown: (() -> Void)?
     var onFnUp: (() -> Void)?
-    var onChordKey: (() -> Void)?   // another key pressed while Fn is held
+    var onChordKey: (() -> Void)?      // another key pressed while Fn is held
+    var onScreenToggle: (() -> Void)?  // ⌃⌥⌘R — start/stop screen recording
 
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -65,7 +66,15 @@ final class HotkeyMonitor {
                 DispatchQueue.main.async { self.onFnUp?() }
             }
         case .keyDown:
-            if fnIsDown {
+            // ⌃⌥⌘R (R = 0x0F) toggles screen recording — an uncommon combo,
+            // checked independently of Fn.
+            let mods: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand]
+            let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+            if keycode == 0x0F,
+               event.flags.contains(mods),
+               !event.flags.contains(.maskShift) {
+                DispatchQueue.main.async { self.onScreenToggle?() }
+            } else if fnIsDown {
                 DispatchQueue.main.async { self.onChordKey?() }
             }
         default:

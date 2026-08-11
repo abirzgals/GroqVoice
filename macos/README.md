@@ -39,6 +39,7 @@ open /Applications/GroqVoice.app
 | **Hold Fn**, говори, отпусти | Push-to-talk: STT → paste в активное окно |
 | **Double-tap Fn** | Lock-режим: запись держится; любой следующий тап Fn останавливает |
 | Начни с `task: …` / `задача: …` | LLM-ответ вместо транскрипта |
+| **⌃⌥⌘R** (Control+Option+Command+R) | Старт/стоп записи активного экрана → .mov на Рабочий стол |
 | **Fn + другая клавиша** | OS shortcut работает как обычно; запись отбрасывается |
 | Иконка в menu bar | 🎙 ready → 🔴 recording → 🟠 locked → ⏳ processing |
 

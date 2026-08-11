@@ -10,8 +10,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         case processing
     }
 
-    private enum IconState {
-        case ready, recording, locked, processing, noKey
+    private enum IconState: Equatable {
+        case ready, recording, locked, processing, noKey, screenRecording
     }
 
     private var statusItem: NSStatusItem!
@@ -25,6 +25,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private lazy var localSTT = LocalSTT(model: config.localWhisperModel,
                                          unloadAfterMinutes: config.localUnloadAfterMinutes)
     private let hotkey = HotkeyMonitor()
+    private let screenRecorder = ScreenRecorder()
+    private var screenRecording = false
     private let netMonitor = NWPathMonitor()
     private var isOnline = true
 
@@ -62,6 +64,18 @@ final class AppController: NSObject, NSApplicationDelegate {
             }
         }
         netMonitor.start(queue: DispatchQueue(label: "groqvoice.net"))
+
+        screenRecorder.onFinish = { [weak self] url in
+            guard let self else { return }
+            self.screenRecording = false
+            self.playSound("Tink")
+            self.setIcon(self.config.groqApiKey.isEmpty ? .noKey : .ready)
+            self.statusItem.menu = self.makeMenu()
+            if let url {
+                Log.write("screen recording saved: \(url.path)")
+                NSWorkspace.shared.activateFileViewerSelecting([url])  // reveal in Finder
+            }
+        }
 
         if config.groqApiKey.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.promptForApiKey(firstRun: true) }
@@ -133,6 +147,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         hotkey.onFnDown = { [weak self] in self?.fnDown() }
         hotkey.onFnUp = { [weak self] in self?.fnUp() }
         hotkey.onChordKey = { [weak self] in self?.chordKey() }
+        hotkey.onScreenToggle = { [weak self] in self?.toggleScreenRecording() }
     }
 
     private func fnDown() {
@@ -379,6 +394,12 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Log", action: #selector(menuOpenLog), keyEquivalent: ""))
         menu.addItem(.separator())
 
+        let screenItem = NSMenuItem(
+            title: screenRecorder.isRecording ? "Stop Screen Recording  (⌃⌥⌘R)" : "Record Screen  (⌃⌥⌘R)",
+            action: #selector(toggleScreenRecording), keyEquivalent: "")
+        menu.addItem(screenItem)
+        menu.addItem(.separator())
+
         let langMenu = NSMenu()
         let languages: [(String, String)] = [
             ("Auto-detect", ""), ("Русский", "ru"), ("English", "en"),
@@ -430,6 +451,10 @@ final class AppController: NSObject, NSApplicationDelegate {
     private func setIcon(_ state: IconState) {
         stopSpinner()
         guard let button = statusItem.button else { return }
+        // While screen-recording, keep the red video badge on any idle state so
+        // an audio push-to-talk in the middle doesn't hide that we're recording.
+        var state = state
+        if screenRecording, state == .ready || state == .noKey { state = .screenRecording }
         let (symbol, tint): (String, NSColor?) = {
             switch state {
             case .ready: return ("mic", nil)
@@ -437,6 +462,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             case .locked: return ("mic.fill", .systemOrange)
             case .processing: return ("hourglass", .systemYellow)
             case .noKey: return ("mic.slash", .systemGray)
+            case .screenRecording: return ("video.fill", .systemRed)
             }
         }()
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "GroqVoice")
@@ -563,6 +589,37 @@ final class AppController: NSObject, NSApplicationDelegate {
                     alert.runModal()
                 }
             }
+        }
+    }
+
+    @objc private func toggleScreenRecording() {
+        if screenRecorder.isRecording {
+            screenRecorder.stop()  // onFinish updates icon/menu + reveals file
+            Log.write("screen recording stopped by hotkey/menu")
+            return
+        }
+
+        guard ScreenRecorder.hasPermission else {
+            ScreenRecorder.requestPermission()
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Screen Recording permission needed"
+            alert.informativeText = "Enable GroqVoice in System Settings → Privacy & Security → Screen Recording, then press ⌃⌥⌘R again."
+            alert.runModal()
+            Log.write("screen recording blocked — permission not granted")
+            return
+        }
+
+        let display = ScreenRecorder.activeDisplayID()
+        if screenRecorder.start(displayID: display) {
+            screenRecording = true
+            playSound("Pop")
+            setIcon(.screenRecording)
+            statusItem.menu = makeMenu()
+            Log.write("screen recording started (display \(display)) → \(screenRecorder.currentURL?.lastPathComponent ?? "?")")
+        } else {
+            playSound("Basso")
+            Log.write("screen recording failed to start")
         }
     }
 
