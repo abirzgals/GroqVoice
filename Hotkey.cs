@@ -65,6 +65,12 @@ public sealed class Hotkey : IDisposable
     private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    /// <summary>True if either of the two virtual keys is physically down right now.</summary>
+    private static bool PhysDown(int vkA, int vkB) =>
+        ((GetAsyncKeyState(vkA) | GetAsyncKeyState(vkB)) & 0x8000) != 0;
 
     private readonly LowLevelKeyboardProc _proc;
     private IntPtr _hookId = IntPtr.Zero;
@@ -76,6 +82,7 @@ public sealed class Hotkey : IDisposable
     private bool _chordActive;
     private bool _otherKeyDuringChord;
     private bool _screenshotFired;   // gate so we only fire once per Win+Ctrl+Alt session
+    private bool _awaitAllReleased;  // after a snip: ignore the chord until Win/Ctrl/Alt are all physically up
 
     // state machine (high-level: PTT vs toggle)
     private enum Mode { Idle, Toggle }
@@ -111,12 +118,42 @@ public sealed class Hotkey : IDisposable
         bool isCtrl = vk == VK_LCONTROL || vk == VK_RCONTROL;
         bool isAlt = vk == VK_LMENU || vk == VK_RMENU;
 
+        // Re-sync the held-flags from the real keyboard on every event. Windows
+        // silently skips a low-level hook that overruns LowLevelHooksTimeout, so
+        // individual key-ups do go missing — most easily right after a snip, while
+        // the full-virtual-screen grab occupies this same thread. Accumulated flags
+        // would then stay stuck "held" and a later lone Ctrl/Win/Alt press would
+        // re-satisfy the chord and fire a second screenshot. Physical state wins;
+        // the in-flight event is layered on top because the hook runs before the
+        // system updates the async key state for this key.
+        _winHeld = PhysDown(VK_LWIN, VK_RWIN);
+        _ctrlHeld = PhysDown(VK_LCONTROL, VK_RCONTROL);
+        _altHeld = PhysDown(VK_LMENU, VK_RMENU);
         if (isDown)
         {
             if (isWin) _winHeld = true;
             else if (isCtrl) _ctrlHeld = true;
             else if (isAlt) _altHeld = true;
-            else if (_chordActive) _otherKeyDuringChord = true;
+        }
+        else if (isUp)
+        {
+            if (isWin) _winHeld = false;
+            else if (isCtrl) _ctrlHeld = false;
+            else if (isAlt) _altHeld = false;
+        }
+
+        // After a screenshot every modifier counts as released, and the chord stays
+        // disarmed until the user has genuinely let go of all three.
+        if (_awaitAllReleased)
+        {
+            if (_winHeld || _ctrlHeld || _altHeld)
+                return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            _awaitAllReleased = false;
+        }
+
+        if (isDown)
+        {
+            if (!isWin && !isCtrl && !isAlt && _chordActive) _otherKeyDuringChord = true;
 
             // Win+Ctrl just became held
             if (!_chordActive && _winHeld && _ctrlHeld)
@@ -128,8 +165,7 @@ public sealed class Hotkey : IDisposable
                 if (_altHeld)
                 {
                     // All three down at once → screenshot, no voice
-                    _screenshotFired = true;
-                    try { ScreenshotTriggered?.Invoke(); } catch { }
+                    FireScreenshot();
                 }
                 else
                 {
@@ -139,32 +175,43 @@ public sealed class Hotkey : IDisposable
             // Alt arrived while Win+Ctrl already held → cancel voice, fire screenshot
             else if (_chordActive && !_screenshotFired && _winHeld && _ctrlHeld && _altHeld)
             {
-                _screenshotFired = true;
                 CancelVoiceLocked();
-                try { ScreenshotTriggered?.Invoke(); } catch { }
+                FireScreenshot();
             }
         }
-        else if (isUp)
+
+        // Closing the chord is driven by the re-synced state, not by which key the
+        // event happened to carry, so a dropped key-up can't strand it open either.
+        if (_chordActive && (!_winHeld || !_ctrlHeld))
         {
-            if (isWin) _winHeld = false;
-            else if (isCtrl) _ctrlHeld = false;
-            else if (isAlt) _altHeld = false;
+            _chordActive = false;
+            bool clean = !_otherKeyDuringChord;
+            _otherKeyDuringChord = false;
+            bool wasScreenshot = _screenshotFired;
+            _screenshotFired = false;
 
-            if (_chordActive && (!_winHeld || !_ctrlHeld))
-            {
-                _chordActive = false;
-                bool clean = !_otherKeyDuringChord;
-                _otherKeyDuringChord = false;
-                bool wasScreenshot = _screenshotFired;
-                _screenshotFired = false;
-
-                if (!wasScreenshot)
-                    OnLowChordUp(clean);
-                // else: voice never started, nothing to release
-            }
+            if (!wasScreenshot)
+                OnLowChordUp(clean);
+            // else: voice never started, nothing to release
         }
 
         return CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    /// <summary>
+    /// Hands the snip off to the caller and immediately winds the chord down as if
+    /// every modifier had been released, so the keys the user is still physically
+    /// holding cannot trigger a second screenshot.
+    /// </summary>
+    private void FireScreenshot()
+    {
+        _chordActive = false;
+        _otherKeyDuringChord = false;
+        _screenshotFired = false;
+        _winHeld = _ctrlHeld = _altHeld = false;
+        _awaitAllReleased = true;
+
+        try { ScreenshotTriggered?.Invoke(); } catch { }
     }
 
     // ===== state machine =====
