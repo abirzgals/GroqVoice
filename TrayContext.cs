@@ -21,6 +21,7 @@ public sealed class TrayContext : ApplicationContext
 
     private CancellationTokenSource? _busyCts;
     private volatile bool _busy;
+    private bool _snipping;              // UI thread only: overlay is currently up
     private Bitmap? _lastSnipBitmap;
     private Action? _balloonAction;
 
@@ -221,6 +222,17 @@ public sealed class TrayContext : ApplicationContext
     }
 
     private void RunSnipping()
+    {
+        // ShowDialog() below runs a nested message loop, so the keyboard hook keeps
+        // firing while the overlay is up and another chord would stack a second
+        // overlay on top of this one. One snip at a time; later chords are dropped.
+        if (_snipping) { Log.Info("snip already in progress — chord ignored"); return; }
+        _snipping = true;
+        try { RunSnippingCore(); }
+        finally { _snipping = false; }
+    }
+
+    private void RunSnippingCore()
     {
         if (_busy) Log.Info("snip triggered while busy — proceeding anyway");
         Log.Info("screenshot snip: opening overlay");
