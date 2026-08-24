@@ -21,7 +21,7 @@ public sealed class TrayContext : ApplicationContext
 
     private CancellationTokenSource? _busyCts;
     private volatile bool _busy;
-    private bool _snipping;              // UI thread only: overlay is currently up
+    private volatile bool _snipping;     // overlay is currently up
     private Bitmap? _lastSnipBitmap;
     private Action? _balloonAction;
 
@@ -315,6 +315,9 @@ public sealed class TrayContext : ApplicationContext
     private void OnChordPressed()
     {
         if (_busy) { Log.Info("chord pressed but busy, ignoring"); return; }
+        // While the snip overlay is up we are fully in photo mode — Win+Ctrl must
+        // not quietly start a recording behind it.
+        if (_snipping) { Log.Info("chord pressed while snipping, ignoring"); return; }
         try
         {
             _rec.Start(_cfg.InputDeviceContains);
