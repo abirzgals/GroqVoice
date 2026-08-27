@@ -37,6 +37,13 @@ public sealed class Config
     // peak amplitude (% of full scale) below which a recording is treated as silent and dropped
     [JsonPropertyName("silencePeakPercent")] public double SilencePeakPercent { get; set; } = 1.0;
 
+    // user-assignable hotkeys, as text ("Win+Ctrl", "Ctrl+Shift+S", "F13").
+    // Modifier-only combos need two modifiers; anything unparsable falls back to
+    // the default and is noted in the log. Laptop Fn keys cannot be bound —
+    // they are resolved in keyboard firmware and never reach Windows.
+    [JsonPropertyName("voiceHotkey")] public string VoiceHotkey { get; set; } = "Win+Ctrl";
+    [JsonPropertyName("screenshotHotkey")] public string ScreenshotHotkey { get; set; } = "Win+Ctrl+Alt";
+
     // chord held longer than this is treated as push-to-talk; shorter is a "tap"
     [JsonPropertyName("pttHoldMs")] public int PttHoldMs { get; set; } = 250;
 

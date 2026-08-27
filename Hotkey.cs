@@ -24,11 +24,43 @@ public sealed class Hotkey : IDisposable
     public int PttHoldMs { get; set; } = 250;
     public int DoubleTapWindowMs { get; set; } = 400;
 
+    /// <summary>User-assigned chord for dictation. Modifier-only combos keep the PTT / double-tap semantics.</summary>
+    public HotkeyCombo VoiceCombo { get; set; } = HotkeyCombo.VoiceDefault;
+    /// <summary>User-assigned chord for the snip. Takes precedence over <see cref="VoiceCombo"/>.</summary>
+    public HotkeyCombo ScreenshotCombo { get; set; } = HotkeyCombo.ScreenshotDefault;
+
     public event Action? ChordPressed;
     /// <summary>clean=false means a third key was pressed during the chord.</summary>
     public event Action<bool>? ChordReleased;
-    /// <summary>Fires once when Win+Ctrl+Alt are all simultaneously held. Cancels any in-progress voice recording.</summary>
+    /// <summary>Fires once when the screenshot combo becomes held. Cancels any in-progress voice recording.</summary>
     public event Action? ScreenshotTriggered;
+
+    /// <summary>
+    /// While set, no action fires and every key is swallowed (except Esc, so the
+    /// capture dialog stays cancellable); the keys being pressed are reported via
+    /// <see cref="CaptureUpdated"/> instead.
+    /// </summary>
+    public bool CaptureMode
+    {
+        get => _captureMode;
+        set
+        {
+            _captureMode = value;
+            if (!value)
+            {
+                // Leaving the dialog: treat everything as released. The keys used to
+                // assign the combo may still be down, and the combo itself may have
+                // just changed — neither should fire an action on the way out.
+                _voiceHeldPrev = false;
+                _shotHeldPrev = false;
+                _otherKeyDuringChord = false;
+                _awaitAllReleased = true;
+            }
+        }
+    }
+    private bool _captureMode;
+    /// <summary>Reports the combo currently being pressed while <see cref="CaptureMode"/> is on.</summary>
+    public event Action<HotkeyCombo>? CaptureUpdated;
 
     // ---- low-level hook plumbing ----
     private const int WH_KEYBOARD_LL = 13;
@@ -43,6 +75,10 @@ public sealed class Hotkey : IDisposable
     private const int VK_RWIN = 0x5C;
     private const int VK_LMENU = 0xA4;
     private const int VK_RMENU = 0xA5;
+    private const int VK_LSHIFT = 0xA0;
+    private const int VK_RSHIFT = 0xA1;
+    private const int VK_ESCAPE = 0x1B;
+    private const int VK_RETURN = 0x0D;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KBDLLHOOKSTRUCT
@@ -79,10 +115,11 @@ public sealed class Hotkey : IDisposable
     private bool _winHeld;
     private bool _ctrlHeld;
     private bool _altHeld;
-    private bool _chordActive;
+    private bool _shiftHeld;
+    private bool _voiceHeldPrev;     // edge detection for the dictation combo
+    private bool _shotHeldPrev;      // edge detection for the screenshot combo
     private bool _otherKeyDuringChord;
-    private bool _screenshotFired;   // gate so we only fire once per Win+Ctrl+Alt session
-    private bool _awaitAllReleased;  // after a snip: ignore the chord until Win/Ctrl/Alt are all physically up
+    private bool _awaitAllReleased;  // after a snip: stay disarmed until every key is physically up
 
     // state machine (high-level: PTT vs toggle)
     private enum Mode { Idle, Toggle }
@@ -117,82 +154,94 @@ public sealed class Hotkey : IDisposable
         bool isWin = vk == VK_LWIN || vk == VK_RWIN;
         bool isCtrl = vk == VK_LCONTROL || vk == VK_RCONTROL;
         bool isAlt = vk == VK_LMENU || vk == VK_RMENU;
+        bool isShift = vk == VK_LSHIFT || vk == VK_RSHIFT;
+        bool isModifier = isWin || isCtrl || isAlt || isShift;
 
         // Re-sync the held-flags from the real keyboard on every event. Windows
         // silently skips a low-level hook that overruns LowLevelHooksTimeout, so
         // individual key-ups do go missing — most easily right after a snip, while
         // the full-virtual-screen grab occupies this same thread. Accumulated flags
-        // would then stay stuck "held" and a later lone Ctrl/Win/Alt press would
+        // would then stay stuck "held" and a later lone modifier press would
         // re-satisfy the chord and fire a second screenshot. Physical state wins;
         // the in-flight event is layered on top because the hook runs before the
         // system updates the async key state for this key.
         _winHeld = PhysDown(VK_LWIN, VK_RWIN);
         _ctrlHeld = PhysDown(VK_LCONTROL, VK_RCONTROL);
         _altHeld = PhysDown(VK_LMENU, VK_RMENU);
-        if (isDown)
+        _shiftHeld = PhysDown(VK_LSHIFT, VK_RSHIFT);
+        if (isDown || isUp)
         {
-            if (isWin) _winHeld = true;
-            else if (isCtrl) _ctrlHeld = true;
-            else if (isAlt) _altHeld = true;
-        }
-        else if (isUp)
-        {
-            if (isWin) _winHeld = false;
-            else if (isCtrl) _ctrlHeld = false;
-            else if (isAlt) _altHeld = false;
+            if (isWin) _winHeld = isDown;
+            else if (isCtrl) _ctrlHeld = isDown;
+            else if (isAlt) _altHeld = isDown;
+            else if (isShift) _shiftHeld = isDown;
         }
 
-        // After a screenshot every modifier counts as released, and the chord stays
-        // disarmed until the user has genuinely let go of all three.
+        // ---- assignment dialog: report, swallow, do nothing else --------------
+        if (CaptureMode)
+        {
+            // Esc and a bare Enter still travel, so Cancel and OK stay reachable from
+            // the keyboard. With a modifier held Enter is fair game as part of a combo.
+            bool bareEnter = vk == VK_RETURN && !_winHeld && !_ctrlHeld && !_altHeld && !_shiftHeld;
+            if (vk == VK_ESCAPE || bareEnter) return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            if (isDown)
+            {
+                var seen = new HotkeyCombo(_winHeld, _ctrlHeld, _altHeld, _shiftHeld,
+                                           isModifier ? 0u : vk);
+                try { CaptureUpdated?.Invoke(seen); } catch { }
+            }
+            return (IntPtr)1;   // never let the combo reach the app underneath
+        }
+
+        var voice = VoiceCombo;
+        var shot = ScreenshotCombo;
+
+        // After a screenshot every key counts as released, and both chords stay
+        // disarmed until the user has genuinely let go of everything.
         if (_awaitAllReleased)
         {
-            if (_winHeld || _ctrlHeld || _altHeld)
+            if (_winHeld || _ctrlHeld || _altHeld || _shiftHeld
+                || KeyHeld(voice.Key, vk, isDown, isUp) || KeyHeld(shot.Key, vk, isDown, isUp))
                 return CallNextHookEx(_hookId, nCode, wParam, lParam);
             _awaitAllReleased = false;
         }
 
-        if (isDown)
+        // ---- screenshot wins over dictation -----------------------------------
+        bool shotHeld = ComboHeld(shot, vk, isDown, isUp);
+        if (shotHeld && !_shotHeldPrev)
         {
-            if (!isWin && !isCtrl && !isAlt && _chordActive) _otherKeyDuringChord = true;
-
-            // Win+Ctrl just became held
-            if (!_chordActive && _winHeld && _ctrlHeld)
-            {
-                _chordActive = true;
-                _otherKeyDuringChord = false;
-                _screenshotFired = false;
-
-                if (_altHeld)
-                {
-                    // All three down at once → screenshot, no voice
-                    FireScreenshot();
-                }
-                else
-                {
-                    OnLowChordDown();
-                }
-            }
-            // Alt arrived while Win+Ctrl already held → cancel voice, fire screenshot
-            else if (_chordActive && !_screenshotFired && _winHeld && _ctrlHeld && _altHeld)
-            {
-                CancelVoiceLocked();
-                FireScreenshot();
-            }
+            _shotHeldPrev = true;
+            // Adding Alt to a held Win+Ctrl lands here: abandon the half-spoken
+            // phrase (dirty release = caller discards) and commit to photo mode.
+            CancelVoiceLocked();
+            _voiceHeldPrev = false;
+            _otherKeyDuringChord = false;
+            FireScreenshot();
+            return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
+        _shotHeldPrev = shotHeld;
 
-        // Closing the chord is driven by the re-synced state, not by which key the
-        // event happened to carry, so a dropped key-up can't strand it open either.
-        if (_chordActive && (!_winHeld || !_ctrlHeld))
+        // ---- dictation --------------------------------------------------------
+        // Driven by re-synced state rather than by whichever key the event carried,
+        // so a dropped key-up cannot strand the chord open.
+        bool voiceHeld = ComboHeld(voice, vk, isDown, isUp);
+        if (voiceHeld && !_voiceHeldPrev)
         {
-            _chordActive = false;
+            _voiceHeldPrev = true;
+            _otherKeyDuringChord = false;
+            OnLowChordDown();
+        }
+        else if (!voiceHeld && _voiceHeldPrev)
+        {
+            _voiceHeldPrev = false;
             bool clean = !_otherKeyDuringChord;
             _otherKeyDuringChord = false;
-            bool wasScreenshot = _screenshotFired;
-            _screenshotFired = false;
-
-            if (!wasScreenshot)
-                OnLowChordUp(clean);
-            // else: voice never started, nothing to release
+            OnLowChordUp(clean);
+        }
+        else if (voiceHeld && isDown && !isModifier && vk != voice.Key)
+        {
+            // A third key rode along — the caller discards the audio.
+            _otherKeyDuringChord = true;
         }
 
         return CallNextHookEx(_hookId, nCode, wParam, lParam);
@@ -205,13 +254,33 @@ public sealed class Hotkey : IDisposable
     /// </summary>
     private void FireScreenshot()
     {
-        _chordActive = false;
+        _voiceHeldPrev = false;
+        _shotHeldPrev = false;
         _otherKeyDuringChord = false;
-        _screenshotFired = false;
-        _winHeld = _ctrlHeld = _altHeld = false;
+        _winHeld = _ctrlHeld = _altHeld = _shiftHeld = false;
         _awaitAllReleased = true;
 
         try { ScreenshotTriggered?.Invoke(); } catch { }
+    }
+
+    /// <summary>
+    /// Modifiers must match exactly — that is what keeps Win+Ctrl and Win+Ctrl+Alt
+    /// apart, so adding Alt ends the dictation match and begins the screenshot one.
+    /// </summary>
+    private bool ComboHeld(HotkeyCombo c, uint eventVk, bool isDown, bool isUp)
+    {
+        if (c.IsEmpty) return false;
+        return c.Win == _winHeld && c.Ctrl == _ctrlHeld
+            && c.Alt == _altHeld && c.Shift == _shiftHeld
+            && (!c.HasKey || KeyHeld(c.Key, eventVk, isDown, isUp));
+    }
+
+    /// <summary>Physical state of one key, with the in-flight event layered on top.</summary>
+    private static bool KeyHeld(uint vk, uint eventVk, bool isDown, bool isUp)
+    {
+        if (vk == 0) return false;
+        if (vk == eventVk && (isDown || isUp)) return isDown;
+        return (GetAsyncKeyState((int)vk) & 0x8000) != 0;
     }
 
     // ===== state machine =====

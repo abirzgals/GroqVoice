@@ -25,6 +25,10 @@ public sealed class TrayContext : ApplicationContext
     private Bitmap? _lastSnipBitmap;
     private Action? _balloonAction;
 
+    private ToolStripMenuItem? _headerItem;
+    private ToolStripMenuItem? _assignVoiceItem;
+    private ToolStripMenuItem? _assignShotItem;
+
     public TrayContext(Config cfg)
     {
         _cfg = cfg;
@@ -35,12 +39,11 @@ public sealed class TrayContext : ApplicationContext
         _recIcon  = MakeDotIcon(Color.FromArgb(220, 60, 60));      // red
         _busyIcon = MakeDotIcon(Color.FromArgb(240, 180, 40));     // amber
 
+        // The menu is built after _hotkey exists — its header shows the live combos.
         _tray = new NotifyIcon
         {
             Icon = _idleIcon,
             Visible = true,
-            Text = "GroqVoice — hold Win+Ctrl to dictate",
-            ContextMenuStrip = BuildMenu(),
         };
         _tray.BalloonTipClicked += (_, _) =>
         {
@@ -59,10 +62,16 @@ public sealed class TrayContext : ApplicationContext
         {
             PttHoldMs = Math.Max(50, _cfg.PttHoldMs),
             DoubleTapWindowMs = Math.Max(150, _cfg.DoubleTapWindowMs),
+            VoiceCombo = HotkeyCombo.Parse(_cfg.VoiceHotkey, HotkeyCombo.VoiceDefault),
+            ScreenshotCombo = HotkeyCombo.Parse(_cfg.ScreenshotHotkey, HotkeyCombo.ScreenshotDefault),
         };
+        Log.Info($"hotkeys: dictation={_hotkey.VoiceCombo} screenshot={_hotkey.ScreenshotCombo}");
         _hotkey.ChordPressed  += OnChordPressed;
         _hotkey.ChordReleased += OnChordReleased;
         _hotkey.ScreenshotTriggered += OnScreenshotTriggered;
+
+        _tray.ContextMenuStrip = BuildMenu();
+        RefreshHotkeyLabels();
 
         if (_cfg.Autostart) Autostart.Enable(Application.ExecutablePath);
     }
@@ -71,7 +80,18 @@ public sealed class TrayContext : ApplicationContext
     {
         var m = new ContextMenuStrip();
 
-        m.Items.Add("GroqVoice — hold Win+Ctrl to dictate").Enabled = false;
+        _headerItem = new ToolStripMenuItem("GroqVoice") { Enabled = false };
+        m.Items.Add(_headerItem);
+        m.Items.Add(new ToolStripSeparator());
+
+        _assignVoiceItem = new ToolStripMenuItem("Assign dictation hotkey…");
+        _assignVoiceItem.Click += (_, _) => AssignHotkey(screenshot: false);
+        m.Items.Add(_assignVoiceItem);
+
+        _assignShotItem = new ToolStripMenuItem("Assign screenshot hotkey…");
+        _assignShotItem.Click += (_, _) => AssignHotkey(screenshot: true);
+        m.Items.Add(_assignShotItem);
+
         m.Items.Add(new ToolStripSeparator());
 
         var setup = new ToolStripMenuItem("Setup / change API key…");
@@ -211,6 +231,63 @@ public sealed class TrayContext : ApplicationContext
         ShowBalloon("Microphone changed",
             string.IsNullOrEmpty(nameContains) ? "Now using system default input." : $"Now using: {nameContains}",
             ToolTipIcon.Info);
+    }
+
+    /// <summary>Mirrors the live combos into the tray tooltip and the menu labels.</summary>
+    private void RefreshHotkeyLabels()
+    {
+        var voice = _hotkey.VoiceCombo;
+        var shot = _hotkey.ScreenshotCombo;
+
+        _tray.Text = Truncate($"GroqVoice — hold {voice} to dictate", 63);
+        if (_headerItem != null) _headerItem.Text = $"Dictate {voice}   ·   Snip {shot}";
+        if (_assignVoiceItem != null) _assignVoiceItem.Text = $"Assign dictation hotkey…  ({voice})";
+        if (_assignShotItem != null) _assignShotItem.Text = $"Assign screenshot hotkey…  ({shot})";
+    }
+
+    // NotifyIcon.Text throws above 63 characters.
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
+
+    private void AssignHotkey(bool screenshot)
+    {
+        var name = screenshot ? "screenshot" : "dictation";
+        var current = screenshot ? _hotkey.ScreenshotCombo : _hotkey.VoiceCombo;
+        try
+        {
+            HotkeyCombo picked;
+            using (var f = new HotkeyCaptureForm(_hotkey, name, current))
+            {
+                if (f.ShowDialog() != DialogResult.OK) { Log.Info($"hotkey assign cancelled ({name})"); return; }
+                picked = f.Result;
+            }
+
+            if (!picked.IsUsable)
+            {
+                ShowBalloon("Hotkey not saved", $"{picked} can't be used on its own.", ToolTipIcon.Warning);
+                return;
+            }
+
+            var other = screenshot ? _hotkey.VoiceCombo : _hotkey.ScreenshotCombo;
+            if (picked == other)
+            {
+                ShowBalloon("Hotkey not saved",
+                    $"{picked} is already assigned to the other action.", ToolTipIcon.Warning);
+                return;
+            }
+
+            if (screenshot) { _hotkey.ScreenshotCombo = picked; _cfg.ScreenshotHotkey = picked.ToString(); }
+            else            { _hotkey.VoiceCombo     = picked; _cfg.VoiceHotkey      = picked.ToString(); }
+
+            _cfg.Save();
+            Log.Info($"hotkey assigned: {name} = {picked}");
+            RefreshHotkeyLabels();
+            ShowBalloon("Hotkey saved", $"{name}: {picked}", ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"hotkey assign failed ({name})", ex);
+            ShowBalloon("Hotkey assign failed", ex.Message, ToolTipIcon.Error);
+        }
     }
 
     private void OnScreenshotTriggered()
