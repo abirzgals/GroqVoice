@@ -56,9 +56,11 @@ public sealed class Hotkey : IDisposable
                 _otherKeyDuringChord = false;
                 _awaitAllReleased = true;
             }
+            _captureKeys.Clear();
         }
     }
     private bool _captureMode;
+    private readonly HashSet<uint> _captureKeys = new();
     /// <summary>Reports the combo currently being pressed while <see cref="CaptureMode"/> is on.</summary>
     public event Action<HotkeyCombo>? CaptureUpdated;
 
@@ -184,11 +186,28 @@ public sealed class Hotkey : IDisposable
             // the keyboard. With a modifier held Enter is fair game as part of a combo.
             bool bareEnter = vk == VK_RETURN && !_winHeld && !_ctrlHeld && !_altHeld && !_shiftHeld;
             if (vk == VK_ESCAPE || bareEnter) return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+            // Mouse buttons and the 0x00/0x07/0xFF filler some KVMs and remote-desktop
+            // stacks inject are dropped outright — they are not keys anyone can bind.
+            if (!isModifier && !HotkeyCombo.IsMouseOrInvalid(vk))
+            {
+                if (isDown) _captureKeys.Add(vk);
+                else if (isUp) _captureKeys.Remove(vk);
+            }
+
             if (isDown)
             {
-                var seen = new HotkeyCombo(_winHeld, _ctrlHeld, _altHeld, _shiftHeld,
-                                           isModifier ? 0u : vk);
-                try { CaptureUpdated?.Invoke(seen); } catch { }
+                // Report the whole held set: however many keys the user is holding,
+                // that is the combo. Only key-downs update it, so letting go of the
+                // chord to reach for the mouse doesn't erase what was pressed.
+                var seen = new List<uint>(_captureKeys);
+                if (_winHeld) seen.Add(HotkeyCombo.VkWin);
+                if (_ctrlHeld) seen.Add(HotkeyCombo.VkCtrl);
+                if (_altHeld) seen.Add(HotkeyCombo.VkAlt);
+                if (_shiftHeld) seen.Add(HotkeyCombo.VkShift);
+
+                var combo = new HotkeyCombo(seen);
+                if (!combo.IsEmpty) try { CaptureUpdated?.Invoke(combo); } catch { }
             }
             return (IntPtr)1;   // never let the combo reach the app underneath
         }
@@ -201,7 +220,7 @@ public sealed class Hotkey : IDisposable
         if (_awaitAllReleased)
         {
             if (_winHeld || _ctrlHeld || _altHeld || _shiftHeld
-                || KeyHeld(voice.Key, vk, isDown, isUp) || KeyHeld(shot.Key, vk, isDown, isUp))
+                || AnyPlainKeyHeld(voice, vk, isDown, isUp) || AnyPlainKeyHeld(shot, vk, isDown, isUp))
                 return CallNextHookEx(_hookId, nCode, wParam, lParam);
             _awaitAllReleased = false;
         }
@@ -238,7 +257,7 @@ public sealed class Hotkey : IDisposable
             _otherKeyDuringChord = false;
             OnLowChordUp(clean);
         }
-        else if (voiceHeld && isDown && !isModifier && vk != voice.Key)
+        else if (voiceHeld && isDown && !isModifier && !voice.Contains(vk))
         {
             // A third key rode along — the caller discards the audio.
             _otherKeyDuringChord = true;
@@ -264,15 +283,42 @@ public sealed class Hotkey : IDisposable
     }
 
     /// <summary>
-    /// Modifiers must match exactly — that is what keeps Win+Ctrl and Win+Ctrl+Alt
-    /// apart, so adding Alt ends the dictation match and begins the screenshot one.
+    /// Every key of the combo must be held, and no modifier outside it. That second
+    /// half is what keeps Win+Ctrl and Win+Ctrl+Alt apart, so adding Alt ends the
+    /// dictation match and begins the screenshot one. Extra non-modifier keys don't
+    /// break the match — they only mark the dictation as dirty.
     /// </summary>
     private bool ComboHeld(HotkeyCombo c, uint eventVk, bool isDown, bool isUp)
     {
         if (c.IsEmpty) return false;
-        return c.Win == _winHeld && c.Ctrl == _ctrlHeld
-            && c.Alt == _altHeld && c.Shift == _shiftHeld
-            && (!c.HasKey || KeyHeld(c.Key, eventVk, isDown, isUp));
+
+        foreach (var vk in c.Keys)
+            if (!VkHeld(vk, eventVk, isDown, isUp)) return false;
+
+        if (!c.Contains(HotkeyCombo.VkWin) && _winHeld) return false;
+        if (!c.Contains(HotkeyCombo.VkCtrl) && _ctrlHeld) return false;
+        if (!c.Contains(HotkeyCombo.VkAlt) && _altHeld) return false;
+        if (!c.Contains(HotkeyCombo.VkShift) && _shiftHeld) return false;
+
+        return true;
+    }
+
+    /// <summary>Modifiers come from the re-synced flags; everything else is read directly.</summary>
+    private bool VkHeld(uint vk, uint eventVk, bool isDown, bool isUp) => vk switch
+    {
+        HotkeyCombo.VkWin => _winHeld,
+        HotkeyCombo.VkCtrl => _ctrlHeld,
+        HotkeyCombo.VkAlt => _altHeld,
+        HotkeyCombo.VkShift => _shiftHeld,
+        _ => KeyHeld(vk, eventVk, isDown, isUp),
+    };
+
+    /// <summary>True if any non-modifier key of the combo is still physically down.</summary>
+    private bool AnyPlainKeyHeld(HotkeyCombo c, uint eventVk, bool isDown, bool isUp)
+    {
+        foreach (var vk in c.Keys)
+            if (!HotkeyCombo.IsModifierVk(vk) && KeyHeld(vk, eventVk, isDown, isUp)) return true;
+        return false;
     }
 
     /// <summary>Physical state of one key, with the in-flight event layered on top.</summary>

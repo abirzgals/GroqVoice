@@ -4,55 +4,124 @@ using System.Windows.Forms;
 namespace GroqVoice;
 
 /// <summary>
-/// A hotkey exactly as the user assigned it: a set of modifiers plus an optional
-/// main key. Stored in config.json as plain text ("Win+Ctrl", "Ctrl+Shift+S",
-/// "F13") so it stays hand-editable via "Open config (advanced)".
+/// A hotkey exactly as the user assigned it: an arbitrary set of keys held
+/// together. No minimum, no maximum — one key is as valid as five. Stored in
+/// config.json as plain text ("Win+Ctrl", "Ctrl+Shift+S", "F13") so it stays
+/// hand-editable via "Open config (advanced)".
+///
+/// Left/right variants are folded together, so a combo assigned with the left
+/// Ctrl also fires on the right one.
 ///
 /// Note on Fn: laptop Fn keys are resolved by the keyboard's own controller and
-/// never reach Windows as a scan code, so they cannot be captured here. F13–F24,
+/// never reach Windows as a scan code, so they cannot be captured. F13–F24,
 /// which some keyboards emit for Fn combos, work fine.
 /// </summary>
-public sealed record HotkeyCombo(bool Win, bool Ctrl, bool Alt, bool Shift, uint Key)
+public sealed class HotkeyCombo : IEquatable<HotkeyCombo>
 {
-    public static readonly HotkeyCombo VoiceDefault = new(true, true, false, false, 0);
-    public static readonly HotkeyCombo ScreenshotDefault = new(true, true, true, false, 0);
-    public static readonly HotkeyCombo None = new(false, false, false, false, 0);
+    // canonical modifier codes — left/right variants normalise onto these
+    public const uint VkWin = 0x5B;      // Keys.LWin
+    public const uint VkCtrl = 0x11;     // Keys.ControlKey
+    public const uint VkAlt = 0x12;      // Keys.Menu
+    public const uint VkShift = 0x10;    // Keys.ShiftKey
 
-    public bool HasKey => Key != 0;
-    public bool IsEmpty => !Win && !Ctrl && !Alt && !Shift && !HasKey;
-    public int ModifierCount => (Win ? 1 : 0) + (Ctrl ? 1 : 0) + (Alt ? 1 : 0) + (Shift ? 1 : 0);
+    public static readonly HotkeyCombo VoiceDefault = new(new[] { VkWin, VkCtrl });
+    public static readonly HotkeyCombo ScreenshotDefault = new(new[] { VkWin, VkCtrl, VkAlt });
+    public static readonly HotkeyCombo None = new(Array.Empty<uint>());
+
+    /// <summary>Normalised, de-duplicated, in display order.</summary>
+    public IReadOnlyList<uint> Keys { get; }
+
+    public HotkeyCombo(IEnumerable<uint> keys)
+    {
+        var set = new List<uint>();
+        foreach (var raw in keys)
+        {
+            var vk = Normalise(raw);
+            if (vk == 0 || IsMouseOrInvalid(vk)) continue;
+            if (!set.Contains(vk)) set.Add(vk);
+        }
+        set.Sort(CompareForDisplay);
+        Keys = set;
+    }
+
+    public bool IsEmpty => Keys.Count == 0;
 
     /// <summary>
-    /// A modifier-only hotkey needs at least two modifiers — a lone Ctrl would fire
-    /// on every ordinary keystroke. With a main key a single modifier is fine, and
-    /// a bare function key (F13…) is fine on its own.
+    /// Any non-empty set is accepted. A single ordinary key is a poor choice — it
+    /// fires whenever that key is typed — but that is the user's call, not ours.
     /// </summary>
-    public bool IsUsable => HasKey ? (ModifierCount >= 1 || IsStandaloneKey) : ModifierCount >= 2;
+    public bool IsUsable => Keys.Count > 0;
 
-    /// <summary>Keys safe to bind with no modifier at all — they type nothing.</summary>
-    private bool IsStandaloneKey =>
-        Key is >= (uint)Keys.F13 and <= (uint)Keys.F24 or (uint)Keys.Pause or (uint)Keys.Scroll;
+    /// <summary>True if this combo would fire on ordinary typing.</summary>
+    public bool IsRisky => Keys.Count == 1 && !IsModifierVk(Keys[0]) && !IsStandaloneKey(Keys[0]);
+
+    public bool Contains(uint vk) => Keys.Contains(Normalise(vk));
+
+    public static bool IsModifierVk(uint vk) =>
+        vk is VkWin or VkCtrl or VkAlt or VkShift;
+
+    /// <summary>Mouse buttons never belong in a keyboard hotkey; 0x00/0x07/0xFF are not real keys.</summary>
+    public static bool IsMouseOrInvalid(uint vk) =>
+        vk is 0x00                      // none
+           or 0x01 or 0x02 or 0x04      // left / right / middle mouse
+           or 0x05 or 0x06              // mouse X1 / X2
+           or 0x07 or 0xFF;             // undefined / VK_NONE (injected by some KVMs and RDP)
+
+    /// <summary>Folds LCtrl/RCtrl → Ctrl, LWin/RWin → Win, and so on.</summary>
+    public static uint Normalise(uint vk) => vk switch
+    {
+        0x5B or 0x5C => VkWin,
+        0xA2 or 0xA3 or 0x11 => VkCtrl,
+        0xA4 or 0xA5 or 0x12 => VkAlt,
+        0xA0 or 0xA1 or 0x10 => VkShift,
+        _ => vk,
+    };
+
+    // modifiers first and in a stable order, then everything else by code
+    private static int CompareForDisplay(uint a, uint b)
+    {
+        int ra = DisplayRank(a), rb = DisplayRank(b);
+        return ra != rb ? ra.CompareTo(rb) : a.CompareTo(b);
+    }
+
+    private static int DisplayRank(uint vk) => vk switch
+    {
+        VkWin => 0, VkCtrl => 1, VkAlt => 2, VkShift => 3, _ => 4,
+    };
+
+    private static bool IsStandaloneKey(uint vk) =>
+        vk is >= (uint)System.Windows.Forms.Keys.F13 and <= (uint)System.Windows.Forms.Keys.F24
+           or (uint)System.Windows.Forms.Keys.Pause
+           or (uint)System.Windows.Forms.Keys.Scroll;
 
     public override string ToString()
     {
         if (IsEmpty) return "(none)";
         var sb = new StringBuilder();
-        if (Win) sb.Append("Win+");
-        if (Ctrl) sb.Append("Ctrl+");
-        if (Alt) sb.Append("Alt+");
-        if (Shift) sb.Append("Shift+");
-        if (HasKey) sb.Append(KeyName(Key));
-        else sb.Length--;   // drop the trailing '+'
+        foreach (var vk in Keys)
+        {
+            if (sb.Length > 0) sb.Append('+');
+            sb.Append(KeyName(vk));
+        }
         return sb.ToString();
     }
 
     private static string KeyName(uint vk)
     {
-        var k = (Keys)vk;
-        var n = k.ToString();
+        switch (vk)
+        {
+            case VkWin: return "Win";
+            case VkCtrl: return "Ctrl";
+            case VkAlt: return "Alt";
+            case VkShift: return "Shift";
+        }
+
+        var n = ((Keys)vk).ToString();
         // D0..D9 are the number-row digits; show them as plain digits.
         if (n.Length == 2 && n[0] == 'D' && char.IsDigit(n[1])) return n[1].ToString();
-        if (n.StartsWith("Oem", StringComparison.Ordinal)) return n[3..];
+        if (n.StartsWith("Oem", StringComparison.Ordinal) && n.Length > 3) return n[3..];
+        // an unnamed code comes back as the bare number — show it as hex so it round-trips
+        if (uint.TryParse(n, out _)) return "0x" + vk.ToString("X2");
         return n;
     }
 
@@ -60,9 +129,7 @@ public sealed record HotkeyCombo(bool Win, bool Ctrl, bool Alt, bool Shift, uint
     {
         if (string.IsNullOrWhiteSpace(text)) return fallback;
 
-        bool win = false, ctrl = false, alt = false, shift = false;
-        uint key = 0;
-
+        var keys = new List<uint>();
         foreach (var raw in text.Split('+', StringSplitOptions.RemoveEmptyEntries))
         {
             var t = raw.Trim();
@@ -70,28 +137,55 @@ public sealed record HotkeyCombo(bool Win, bool Ctrl, bool Alt, bool Shift, uint
 
             switch (t.ToLowerInvariant())
             {
-                case "win" or "windows" or "meta" or "super": win = true; continue;
-                case "ctrl" or "control": ctrl = true; continue;
-                case "alt": alt = true; continue;
-                case "shift": shift = true; continue;
+                case "win" or "windows" or "meta" or "super": keys.Add(VkWin); continue;
+                case "ctrl" or "control": keys.Add(VkCtrl); continue;
+                case "alt" or "menu": keys.Add(VkAlt); continue;
+                case "shift": keys.Add(VkShift); continue;
+            }
+
+            if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                && uint.TryParse(t[2..], System.Globalization.NumberStyles.HexNumber, null, out var hex))
+            {
+                keys.Add(hex);
+                continue;
             }
 
             if (t.Length == 1 && char.IsDigit(t[0])) t = "D" + t;
-            if (Enum.TryParse<Keys>(t, ignoreCase: true, out var parsed) && parsed != Keys.None)
+            if (Enum.TryParse<Keys>(t, ignoreCase: true, out var parsed) && parsed != System.Windows.Forms.Keys.None)
             {
-                key = (uint)parsed;
+                keys.Add((uint)parsed);
                 continue;
             }
 
             Log.Info($"hotkey parse: unrecognised token \"{raw}\" in \"{text}\" — ignored");
         }
 
-        var combo = new HotkeyCombo(win, ctrl, alt, shift, key);
+        var combo = new HotkeyCombo(keys);
         if (!combo.IsUsable)
         {
-            Log.Info($"hotkey parse: \"{text}\" is not a usable combo — falling back to {fallback}");
+            Log.Info($"hotkey parse: \"{text}\" yielded no usable keys — falling back to {fallback}");
             return fallback;
         }
         return combo;
     }
+
+    public bool Equals(HotkeyCombo? other)
+    {
+        if (other is null || other.Keys.Count != Keys.Count) return false;
+        for (int i = 0; i < Keys.Count; i++)
+            if (Keys[i] != other.Keys[i]) return false;
+        return true;
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as HotkeyCombo);
+
+    public override int GetHashCode()
+    {
+        var h = new HashCode();
+        foreach (var k in Keys) h.Add(k);
+        return h.ToHashCode();
+    }
+
+    public static bool operator ==(HotkeyCombo? a, HotkeyCombo? b) => a?.Equals(b) ?? b is null;
+    public static bool operator !=(HotkeyCombo? a, HotkeyCombo? b) => !(a == b);
 }

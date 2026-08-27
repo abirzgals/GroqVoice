@@ -57,7 +57,7 @@ public sealed class HotkeyCaptureForm : Form
             Location = new Point(16, 96),
             Size = new Size(388, 34),
             ForeColor = SystemColors.GrayText,
-            Text = "Two or more modifiers, or a modifier plus a key. "
+            Text = "Hold any number of keys — mouse buttons are ignored. "
                  + "Laptop Fn keys never reach Windows and cannot be captured.",
         };
 
@@ -98,11 +98,14 @@ public sealed class HotkeyCaptureForm : Form
         _captured = seen;
         _preview.Text = seen.ToString();
 
-        bool usable = seen.IsUsable;
-        _ok.Enabled = usable;
-        _preview.ForeColor = usable ? SystemColors.ControlText : Color.Firebrick;
-        if (!usable && !seen.IsEmpty)
-            _hint.Text = $"{seen} is not usable on its own — add another modifier or a key.";
+        // Any non-empty set is accepted; a lone ordinary key is only flagged, since
+        // it would also fire whenever that key is typed normally.
+        _ok.Enabled = seen.IsUsable;
+        _preview.ForeColor = seen.IsRisky ? Color.DarkGoldenrod : SystemColors.ControlText;
+        _hint.Text = seen.IsRisky
+            ? $"{seen} will also fire whenever you type it. Add a modifier if that's not what you want."
+            : "Hold any number of keys — mouse buttons are ignored. "
+            + "Laptop Fn keys never reach Windows and cannot be captured.";
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
