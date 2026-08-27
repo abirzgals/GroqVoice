@@ -66,7 +66,6 @@ public sealed class AnnotatorForm : Form
             Padding = new Padding(6, 6, 6, 6),
         };
         BuildToolbar();
-        Controls.Add(_toolbar);
 
         // --- canvas in a scrollable container ---
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.FromArgb(20, 20, 20) };
@@ -80,7 +79,13 @@ public sealed class AnnotatorForm : Form
         _canvas.MouseMove += OnCanvasMouseMove;
         _canvas.MouseUp   += OnCanvasMouseUp;
         scroll.Controls.Add(_canvas);
+
+        // Docking is resolved from the last-added control backwards, so the Fill
+        // panel has to go in FIRST and the Top toolbar LAST. Added the other way
+        // round, Fill claims the whole client area and the toolbar covers the top
+        // of the image instead of getting a band of its own.
         Controls.Add(scroll);
+        Controls.Add(_toolbar);
 
         // Size form to fit image, capped to screen real estate
         var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
