@@ -57,8 +57,8 @@ public sealed class HotkeyCaptureForm : Form
             Location = new Point(16, 96),
             Size = new Size(388, 34),
             ForeColor = SystemColors.GrayText,
-            Text = "Hold any number of keys — mouse buttons are ignored. "
-                 + "Laptop Fn keys never reach Windows and cannot be captured.",
+            Text = "Hold any number of keys — mouse buttons are ignored.\r\n"
+                 + "Enter or OK saves.  Esc or closing the window discards.",
         };
 
         _ok = new Button
@@ -95,17 +95,11 @@ public sealed class HotkeyCaptureForm : Form
         // Marshal to the UI thread: the hook fires on whichever thread installed it.
         if (InvokeRequired) { try { BeginInvoke(() => OnCaptureUpdated(seen)); } catch { } return; }
 
+        // Whatever was held is the combo — any number of keys, and no opinion here
+        // about which of them are sensible.
         _captured = seen;
         _preview.Text = seen.ToString();
-
-        // Any non-empty set is accepted; a lone ordinary key is only flagged, since
-        // it would also fire whenever that key is typed normally.
         _ok.Enabled = seen.IsUsable;
-        _preview.ForeColor = seen.IsRisky ? Color.DarkGoldenrod : SystemColors.ControlText;
-        _hint.Text = seen.IsRisky
-            ? $"{seen} will also fire whenever you type it. Add a modifier if that's not what you want."
-            : "Hold any number of keys — mouse buttons are ignored. "
-            + "Laptop Fn keys never reach Windows and cannot be captured.";
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

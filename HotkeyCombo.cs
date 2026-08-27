@@ -46,26 +46,23 @@ public sealed class HotkeyCombo : IEquatable<HotkeyCombo>
 
     public bool IsEmpty => Keys.Count == 0;
 
-    /// <summary>
-    /// Any non-empty set is accepted. A single ordinary key is a poor choice — it
-    /// fires whenever that key is typed — but that is the user's call, not ours.
-    /// </summary>
+    /// <summary>Any non-empty set is accepted — which keys are sensible is the user's call.</summary>
     public bool IsUsable => Keys.Count > 0;
-
-    /// <summary>True if this combo would fire on ordinary typing.</summary>
-    public bool IsRisky => Keys.Count == 1 && !IsModifierVk(Keys[0]) && !IsStandaloneKey(Keys[0]);
 
     public bool Contains(uint vk) => Keys.Contains(Normalise(vk));
 
     public static bool IsModifierVk(uint vk) =>
         vk is VkWin or VkCtrl or VkAlt or VkShift;
 
-    /// <summary>Mouse buttons never belong in a keyboard hotkey; 0x00/0x07/0xFF are not real keys.</summary>
+    /// <summary>
+    /// Mouse buttons, plus 0x00 which means "no key at all". Everything else is
+    /// bindable, however odd the code — vendor keys like the OemClear some laptops
+    /// report for Fn are perfectly valid hotkeys.
+    /// </summary>
     public static bool IsMouseOrInvalid(uint vk) =>
-        vk is 0x00                      // none
-           or 0x01 or 0x02 or 0x04      // left / right / middle mouse
-           or 0x05 or 0x06              // mouse X1 / X2
-           or 0x07 or 0xFF;             // undefined / VK_NONE (injected by some KVMs and RDP)
+        vk is 0x00                      // no key
+           or 0x01 or 0x02              // left / right mouse
+           or 0x04 or 0x05 or 0x06;     // middle / X1 / X2 mouse
 
     /// <summary>Folds LCtrl/RCtrl → Ctrl, LWin/RWin → Win, and so on.</summary>
     public static uint Normalise(uint vk) => vk switch
@@ -88,11 +85,6 @@ public sealed class HotkeyCombo : IEquatable<HotkeyCombo>
     {
         VkWin => 0, VkCtrl => 1, VkAlt => 2, VkShift => 3, _ => 4,
     };
-
-    private static bool IsStandaloneKey(uint vk) =>
-        vk is >= (uint)System.Windows.Forms.Keys.F13 and <= (uint)System.Windows.Forms.Keys.F24
-           or (uint)System.Windows.Forms.Keys.Pause
-           or (uint)System.Windows.Forms.Keys.Scroll;
 
     public override string ToString()
     {
@@ -119,9 +111,11 @@ public sealed class HotkeyCombo : IEquatable<HotkeyCombo>
         var n = ((Keys)vk).ToString();
         // D0..D9 are the number-row digits; show them as plain digits.
         if (n.Length == 2 && n[0] == 'D' && char.IsDigit(n[1])) return n[1].ToString();
-        if (n.StartsWith("Oem", StringComparison.Ordinal) && n.Length > 3) return n[3..];
         // an unnamed code comes back as the bare number — show it as hex so it round-trips
         if (uint.TryParse(n, out _)) return "0x" + vk.ToString("X2");
+        // Names are printed verbatim, Oem* included: trimming the prefix made OemClear
+        // render as "Clear", which parses back as Keys.Clear (0x0C) — a different key.
+        // Some laptops report Fn as OemClear, so that silently broke binding Fn.
         return n;
     }
 
