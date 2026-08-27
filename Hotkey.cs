@@ -182,31 +182,30 @@ public sealed class Hotkey : IDisposable
         // ---- assignment dialog: report, swallow, do nothing else --------------
         if (CaptureMode)
         {
-            // Esc and a bare Enter still travel, so Cancel and OK stay reachable from
-            // the keyboard. With a modifier held Enter is fair game as part of a combo.
-            bool bareEnter = vk == VK_RETURN && !_winHeld && !_ctrlHeld && !_altHeld && !_shiftHeld;
-            if (vk == VK_ESCAPE || bareEnter) return CallNextHookEx(_hookId, nCode, wParam, lParam);
+            uint norm = HotkeyCombo.Normalise(vk);
 
-            // Mouse buttons and the 0x00/0x07/0xFF filler some KVMs and remote-desktop
-            // stacks inject are dropped outright — they are not keys anyone can bind.
-            if (!isModifier && !HotkeyCombo.IsMouseOrInvalid(vk))
+            // Esc, and Enter with nothing else held, still travel so Cancel and OK stay
+            // reachable. Enter alongside other keys is fair game as part of a combo.
+            bool loneEnter = norm == VK_RETURN && _captureKeys.Count == 0;
+            if (norm == VK_ESCAPE || loneEnter) return CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+            // Track the held set purely from the events we see here — modifiers
+            // included. GetAsyncKeyState is no use in capture: every key is swallowed
+            // below, a swallowed key never reaches the async state table, and
+            // re-syncing from it wiped the modifiers pressed a moment earlier, leaving
+            // only whichever key arrived last.
+            if (!HotkeyCombo.IsMouseOrInvalid(norm))
             {
-                if (isDown) _captureKeys.Add(vk);
-                else if (isUp) _captureKeys.Remove(vk);
+                if (isDown) _captureKeys.Add(norm);
+                else if (isUp) _captureKeys.Remove(norm);
             }
 
             if (isDown)
             {
-                // Report the whole held set: however many keys the user is holding,
-                // that is the combo. Only key-downs update it, so letting go of the
-                // chord to reach for the mouse doesn't erase what was pressed.
-                var seen = new List<uint>(_captureKeys);
-                if (_winHeld) seen.Add(HotkeyCombo.VkWin);
-                if (_ctrlHeld) seen.Add(HotkeyCombo.VkCtrl);
-                if (_altHeld) seen.Add(HotkeyCombo.VkAlt);
-                if (_shiftHeld) seen.Add(HotkeyCombo.VkShift);
-
-                var combo = new HotkeyCombo(seen);
+                // Whatever is held together is the combo, however many keys that is.
+                // Only key-downs update it, so releasing the chord to reach for the
+                // mouse doesn't erase what was pressed.
+                var combo = new HotkeyCombo(_captureKeys);
                 if (!combo.IsEmpty) try { CaptureUpdated?.Invoke(combo); } catch { }
             }
             return (IntPtr)1;   // never let the combo reach the app underneath
