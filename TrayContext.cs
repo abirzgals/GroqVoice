@@ -174,6 +174,21 @@ public sealed class TrayContext : ApplicationContext
         };
         m.Items.Add(keepClip);
 
+        var typeMode = new ToolStripMenuItem("Type text instead of pasting")
+        {
+            CheckOnClick = true,
+            Checked = string.Equals(_cfg.PasteMode?.Trim(), "type", StringComparison.OrdinalIgnoreCase),
+            ToolTipText = "Sends the text as keystrokes rather than Ctrl+V. Slower, but it does not "
+                        + "depend on a remote desktop syncing its clipboard in time. Takes effect immediately.",
+        };
+        typeMode.CheckedChanged += (_, _) =>
+        {
+            _cfg.PasteMode = typeMode.Checked ? "type" : "auto";
+            try { _cfg.Save(); } catch (Exception ex) { Log.Warn($"save pasteMode failed: {ex.Message}"); }
+            Log.Info($"pasteMode={_cfg.PasteMode}");
+        };
+        m.Items.Add(typeMode);
+
         var auto = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = Autostart.IsEnabled() };
         auto.CheckedChanged += (_, _) =>
         {

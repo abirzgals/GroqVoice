@@ -107,11 +107,21 @@ public static class Paster
 
         // One batch per character keeps ordering deterministic across remote clients,
         // which can reorder or coalesce a single large batch.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        uint sent = 0;
         foreach (var ch in text)
         {
             var inputs = new[] { Char(ch, false), Char(ch, true) };
-            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+            sent += SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
         }
+        sw.Stop();
+
+        uint expected = (uint)text.Length * 2;
+        if (sent != expected)
+            Log.Warn($"paste: typing accepted {sent}/{expected} events after {sw.ElapsedMilliseconds} ms — " +
+                     $"last error {Marshal.GetLastWin32Error()}");
+        else
+            Log.Info($"paste: typed {text.Length} chars in {sw.ElapsedMilliseconds} ms");
     }
 
     [StructLayout(LayoutKind.Sequential)]
