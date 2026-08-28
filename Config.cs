@@ -60,6 +60,21 @@ public sealed class Config
     // where the initial Ctrl+V may not reach the remote side in time.
     [JsonPropertyName("restoreClipboardAfterPaste")] public bool RestoreClipboardAfterPaste { get; set; } = false;
 
+    // "auto"  — paste normally, but wait for clipboard sync when the focused window
+    //           looks like a remote-desktop session (default)
+    // "paste" — always Ctrl+V immediately, no detection
+    // "type"  — send the text as literal keystrokes instead of pasting
+    [JsonPropertyName("pasteMode")] public string PasteMode { get; set; } = "auto";
+
+    // head start given to a remote client's clipboard sync before Ctrl+V is sent
+    [JsonPropertyName("remotePasteDelayMs")] public int RemotePasteDelayMs { get; set; } = 400;
+
+    // extra window-title substrings that mark a remote session. The built-in list
+    // covers Chrome Remote Desktop in several languages; add your own if the title
+    // differs — matching is case-insensitive.
+    [JsonPropertyName("remoteWindowMarkers")] public string[] RemoteWindowMarkers { get; set; } =
+        Array.Empty<string>();
+
     public static string Dir => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GroqVoice");

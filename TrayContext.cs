@@ -248,6 +248,18 @@ public sealed class TrayContext : ApplicationContext
     // NotifyIcon.Text throws above 63 characters.
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 
+    private PasteOptions BuildPasteOptions() => new()
+    {
+        Mode = _cfg.PasteMode?.Trim().ToLowerInvariant() switch
+        {
+            "type" => GroqVoice.PasteMode.Type,
+            "paste" => GroqVoice.PasteMode.Paste,
+            _ => GroqVoice.PasteMode.Auto,
+        },
+        RemoteDelayMs = Math.Clamp(_cfg.RemotePasteDelayMs, 0, 5000),
+        RemoteWindowMarkers = _cfg.RemoteWindowMarkers,
+    };
+
     private void AssignHotkey(bool screenshot)
     {
         var name = screenshot ? "screenshot" : "dictation";
@@ -498,7 +510,9 @@ public sealed class TrayContext : ApplicationContext
                 }
 
                 if (!string.IsNullOrEmpty(output))
-                    _ui.Post(_ => Paster.Paste(output, restoreClipboard: _cfg.RestoreClipboardAfterPaste), null);
+                    _ui.Post(_ => Paster.Paste(output,
+                        restoreClipboard: _cfg.RestoreClipboardAfterPaste,
+                        options: BuildPasteOptions()), null);
 
                 if (_cfg.PlayFeedbackSounds) Click.Low();
             }
