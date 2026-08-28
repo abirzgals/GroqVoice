@@ -165,6 +165,11 @@ public static class Paster
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
 
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+    private const uint MAPVK_VK_TO_VSC = 0;
+
     private static void SendCtrlV()
     {
         // If the user is still holding Win/Ctrl when we paste, those would combine with V
@@ -189,7 +194,17 @@ public static class Paster
         type = INPUT_KEYBOARD,
         U = new InputUnion
         {
-            ki = new KEYBDINPUT { wVk = vk, dwFlags = up ? KEYEVENTF_KEYUP : 0 }
+            ki = new KEYBDINPUT
+            {
+                wVk = vk,
+                // Browsers derive KeyboardEvent.code from the hardware scan code, and a
+                // remote-desktop client forwards keys by that code. Left at 0 these
+                // arrive with an empty code, so Chrome Remote Desktop had nothing to
+                // forward and the Ctrl+V never reached the far machine at all — the
+                // clipboard was never the problem for the keystroke.
+                wScan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC),
+                dwFlags = up ? KEYEVENTF_KEYUP : 0,
+            }
         }
     };
 

@@ -67,7 +67,7 @@ public sealed class Config
     [JsonPropertyName("pasteMode")] public string PasteMode { get; set; } = "auto";
 
     // head start given to a remote client's clipboard sync before Ctrl+V is sent
-    [JsonPropertyName("remotePasteDelayMs")] public int RemotePasteDelayMs { get; set; } = 400;
+    [JsonPropertyName("remotePasteDelayMs")] public int RemotePasteDelayMs { get; set; } = 800;
 
     // extra window-title substrings that mark a remote session. The built-in list
     // covers Chrome Remote Desktop in several languages; add your own if the title
