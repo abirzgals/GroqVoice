@@ -113,6 +113,11 @@ public sealed class HotkeyCombo : IEquatable<HotkeyCombo>
         if (n.Length == 2 && n[0] == 'D' && char.IsDigit(n[1])) return n[1].ToString();
         // an unnamed code comes back as the bare number — show it as hex so it round-trips
         if (uint.TryParse(n, out _)) return "0x" + vk.ToString("X2");
+        // Keys is a [Flags] enum, so a code with no name of its own is rendered as the
+        // sum of the ones that fit: 0xFF becomes "LButton, OemClear". That reads as two
+        // keys — one of them a mouse button — when it is really a single vendor code,
+        // which is exactly how some laptops report Fn. Show the raw code instead.
+        if (n.Contains(',')) return "0x" + vk.ToString("X2");
         // Names are printed verbatim, Oem* included: trimming the prefix made OemClear
         // render as "Clear", which parses back as Keys.Clear (0x0C) — a different key.
         // Some laptops report Fn as OemClear, so that silently broke binding Fn.
