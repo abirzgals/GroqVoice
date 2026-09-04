@@ -14,7 +14,9 @@ public sealed class PasteOptions
 {
     public PasteMode Mode { get; init; } = PasteMode.Auto;
     /// <summary>Head start given to the client's clipboard sync before Ctrl+V.</summary>
-    public int RemoteDelayMs { get; init; } = 400;
+    public int RemoteDelayMs { get; init; } = 800;
+    /// <summary>Blur/focus the remote window first, so the client re-reads the clipboard.</summary>
+    public bool NudgeFocus { get; init; } = true;
     public string[]? RemoteWindowMarkers { get; init; }
 }
 
@@ -46,9 +48,15 @@ public static class Paster
 
         if (remote)
         {
-            // The far machine pastes from its own clipboard, so give the client's
-            // sync a moment to carry ours across before the keystroke lands.
-            Log.Info($"paste: remote session detected ({why}) — waiting {opt.RemoteDelayMs} ms for clipboard sync");
+            Log.Info($"paste: remote session detected ({why})");
+
+            // These clients read the local clipboard when their window takes focus,
+            // not when the clipboard changes. Dictating without ever leaving the
+            // session means no focus event, so the far machine keeps pasting whatever
+            // was there when the window was last entered — no amount of waiting helps.
+            // Poke the window's focus so the client re-reads.
+            if (opt.NudgeFocus) NudgeFocus();
+
             Thread.Sleep(Math.Max(0, opt.RemoteDelayMs));
         }
         else
@@ -78,6 +86,51 @@ public static class Paster
             r.Start();
             r.Join();
         });
+    }
+
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr hWnd);
+
+    /// <summary>
+    /// Drives a blur/focus cycle on the foreground window so a remote-desktop client
+    /// re-reads the local clipboard.
+    ///
+    /// Deliberately does NOT touch the foreground window: attaching to its input
+    /// queue makes the cross-thread SetFocus legal, so the window keeps its
+    /// foreground status and the user never sees focus move. Changing the actual
+    /// foreground would risk stranding focus on a hidden window if the restore
+    /// failed.
+    /// </summary>
+    private static void NudgeFocus()
+    {
+        var target = GetForegroundWindow();
+        if (target == IntPtr.Zero) { Log.Warn("paste: no foreground window to nudge"); return; }
+
+        uint us = GetCurrentThreadId();
+        uint them = GetWindowThreadProcessId(target, IntPtr.Zero);
+        if (them == 0 || them == us) return;
+
+        if (!AttachThreadInput(us, them, true))
+        {
+            Log.Warn($"paste: focus nudge could not attach to the target thread (err {Marshal.GetLastWin32Error()})");
+            return;
+        }
+        try
+        {
+            SetFocus(IntPtr.Zero);      // blur  → the client sees its window lose focus
+            Thread.Sleep(40);
+            SetFocus(target);           // focus → and take it back, re-reading the clipboard
+            Log.Info("paste: focus nudged so the client re-reads the clipboard");
+        }
+        finally
+        {
+            AttachThreadInput(us, them, false);
+            if (GetForegroundWindow() != target)
+                Log.Warn("paste: foreground window changed during the focus nudge");
+        }
     }
 
     private static void SetClipboard(string text, bool keepPrevious, out string? previous)

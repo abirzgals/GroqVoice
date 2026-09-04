@@ -272,6 +272,7 @@ public sealed class TrayContext : ApplicationContext
             _ => GroqVoice.PasteMode.Auto,
         },
         RemoteDelayMs = Math.Clamp(_cfg.RemotePasteDelayMs, 0, 5000),
+        NudgeFocus = _cfg.RemoteClipboardFocusNudge,
         RemoteWindowMarkers = _cfg.RemoteWindowMarkers,
     };
 
