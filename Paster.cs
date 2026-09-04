@@ -15,8 +15,12 @@ public sealed class PasteOptions
     public PasteMode Mode { get; init; } = PasteMode.Auto;
     /// <summary>Head start given to the client's clipboard sync before Ctrl+V.</summary>
     public int RemoteDelayMs { get; init; } = 800;
-    /// <summary>Blur/focus the remote window first, so the client re-reads the clipboard.</summary>
-    public bool NudgeFocus { get; init; } = true;
+    /// <summary>
+    /// Re-activate the remote window first, so the client re-reads the clipboard.
+    /// Off by default: forcing activation from a background process runs into the
+    /// foreground lock and was measured to be unreliable in both directions.
+    /// </summary>
+    public bool NudgeFocus { get; init; } = false;
     public string[]? RemoteWindowMarkers { get; init; }
 }
 
@@ -50,12 +54,11 @@ public static class Paster
         {
             Log.Info($"paste: remote session detected ({why})");
 
-            // These clients read the local clipboard when their window takes focus,
+            // These clients read the local clipboard when their window is activated,
             // not when the clipboard changes. Dictating without ever leaving the
-            // session means no focus event, so the far machine keeps pasting whatever
+            // session produces no activation, so the far machine keeps pasting whatever
             // was there when the window was last entered — no amount of waiting helps.
-            // Poke the window's focus so the client re-reads.
-            if (opt.NudgeFocus) NudgeFocus();
+            if (opt.NudgeFocus) NudgeActivation();
 
             Thread.Sleep(Math.Max(0, opt.RemoteDelayMs));
         }
@@ -92,45 +95,61 @@ public static class Paster
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll", SetLastError = true)] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-    [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string? cls, string? title);
 
     /// <summary>
-    /// Drives a blur/focus cycle on the foreground window so a remote-desktop client
+    /// Deactivates and re-activates the foreground window so a remote-desktop client
     /// re-reads the local clipboard.
     ///
-    /// Deliberately does NOT touch the foreground window: attaching to its input
-    /// queue makes the cross-thread SetFocus legal, so the window keeps its
-    /// foreground status and the user never sees focus move. Changing the actual
-    /// foreground would risk stranding focus on a hidden window if the restore
-    /// failed.
+    /// A Win32 SetFocus cycle was tried first and did nothing: Chrome drives the page's
+    /// focus from window *activation*, so a focus change on the top-level HWND never
+    /// reaches the renderer. Activation is what happens when the user alt-tabs away and
+    /// back — the one thing that demonstrably syncs the clipboard.
+    ///
+    /// The taskbar stands in as the intermediate window: it always exists and
+    /// activating it shows the user nothing. AttachThreadInput lifts the foreground
+    /// lock that would otherwise make SetForegroundWindow fail from a background
+    /// process. The restore is verified and retried, because leaving the user parked on
+    /// the taskbar would be a great deal worse than a stale paste.
     /// </summary>
-    private static void NudgeFocus()
+    private static void NudgeActivation()
     {
         var target = GetForegroundWindow();
-        if (target == IntPtr.Zero) { Log.Warn("paste: no foreground window to nudge"); return; }
+        if (target == IntPtr.Zero) { Log.Warn("paste: no foreground window to re-activate"); return; }
 
+        var standIn = FindWindow("Shell_TrayWnd", null);
+        if (standIn == IntPtr.Zero) { Log.Warn("paste: taskbar window not found, skipping re-activation"); return; }
+
+        if (!Activate(standIn)) { Log.Warn("paste: could not deactivate the window, clipboard not refreshed"); return; }
+
+        if (Activate(target))
+            Log.Info("paste: window re-activated so the client re-reads the clipboard");
+        else
+            Log.Error("paste: FOREGROUND NOT RESTORED after re-activation - focus may be on the taskbar");
+    }
+
+    /// <summary>
+    /// Attaches to whichever thread owns the foreground at this moment before asking for
+    /// it. Attaching once up front does not work: after the first switch the foreground
+    /// belongs to a different thread, and the call is refused.
+    /// </summary>
+    private static bool Activate(IntPtr want)
+    {
         uint us = GetCurrentThreadId();
-        uint them = GetWindowThreadProcessId(target, IntPtr.Zero);
-        if (them == 0 || them == us) return;
+        for (int i = 0; i < 6; i++)
+        {
+            var fg = GetForegroundWindow();
+            if (fg == want) return true;
 
-        if (!AttachThreadInput(us, them, true))
-        {
-            Log.Warn($"paste: focus nudge could not attach to the target thread (err {Marshal.GetLastWin32Error()})");
-            return;
+            uint owner = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, IntPtr.Zero);
+            bool attached = owner != 0 && owner != us && AttachThreadInput(us, owner, true);
+            try { SetForegroundWindow(want); }
+            finally { if (attached) AttachThreadInput(us, owner, false); }
+
+            Thread.Sleep(50);
         }
-        try
-        {
-            SetFocus(IntPtr.Zero);      // blur  → the client sees its window lose focus
-            Thread.Sleep(40);
-            SetFocus(target);           // focus → and take it back, re-reading the clipboard
-            Log.Info("paste: focus nudged so the client re-reads the clipboard");
-        }
-        finally
-        {
-            AttachThreadInput(us, them, false);
-            if (GetForegroundWindow() != target)
-                Log.Warn("paste: foreground window changed during the focus nudge");
-        }
+        return GetForegroundWindow() == want;
     }
 
     private static void SetClipboard(string text, bool keepPrevious, out string? previous)

@@ -69,11 +69,16 @@ public sealed class Config
     // head start given to a remote client's clipboard sync before Ctrl+V is sent
     [JsonPropertyName("remotePasteDelayMs")] public int RemotePasteDelayMs { get; set; } = 800;
 
-    // Remote clients read the local clipboard when their window gains focus, not when
+    // Remote clients read the local clipboard when their window is ACTIVATED, not when
     // the clipboard changes — so dictating without ever leaving the session pastes
-    // whatever was there when the window was entered. When true, the window's focus is
-    // cycled before Ctrl+V so the client re-reads. Set false if it misbehaves.
-    [JsonPropertyName("remoteClipboardFocusNudge")] public bool RemoteClipboardFocusNudge { get; set; } = true;
+    // whatever was there when the window was entered.
+    //
+    // Off by default. Forcing the activation means taking the foreground away and
+    // giving it back, and Windows' foreground lock makes that unreliable from a
+    // background process: measured here, one run moved the foreground and could not
+    // restore it (focus stranded on the taskbar), the next could not move it at all.
+    // Enable only if it proves to behave on your machine.
+    [JsonPropertyName("remoteClipboardFocusNudge")] public bool RemoteClipboardFocusNudge { get; set; } = false;
 
     // extra window-title substrings that mark a remote session. The built-in list
     // covers Chrome Remote Desktop in several languages; add your own if the title
