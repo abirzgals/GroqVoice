@@ -64,4 +64,16 @@ private func vocabulary(_ text: String) throws -> Vocabulary {
         let v = try vocabulary("API: апи\n")
         #expect(v.applyAliases(to: "напиши апи и капитан").text == "напиши API и капитан")
     }
+
+    @Test func lowerCaseTermsKeepTheSentenceCapital() throws {
+        let v = try vocabulary("прод: прот\nзакоммить: закамить\nGitHub: гитхаб\n")
+        let out = v.applyAliases(to: "Закамить и кидай в прот. Прот упал, Гитхаб тоже.")
+        #expect(out.text == "Закоммить и кидай в прод. Прод упал, GitHub тоже.")
+    }
+
+    @Test func theTermItselfNeverMatchesLongerWords() throws {
+        let v = try vocabulary("Телеграм: телег\n")
+        #expect(v.applyAliases(to: "Я протестировал телеграмму.").text == "Я протестировал телеграмму.")
+        #expect(v.applyAliases(to: "напиши в телеге").text == "напиши в Телеграм")
+    }
 }

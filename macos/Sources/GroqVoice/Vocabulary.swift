@@ -66,10 +66,17 @@ final class Vocabulary {
             let matches = matcher.regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
             guard !matches.isEmpty else { continue }
             for m in matches.reversed() {
-                // Skip matches that are already the canonical spelling.
-                guard let r = Range(m.range, in: result), result[r] != matcher.term else { continue }
-                changes.append("\(result[r]) → \(matcher.term)")
-                result.replaceSubrange(r, with: matcher.term)
+                guard let r = Range(m.range, in: result) else { continue }
+                // A lower-case term is an ordinary word ("прод"), not a name:
+                // it keeps the capital it had at the start of a sentence.
+                var replacement = matcher.term
+                if result[r].first?.isUppercase == true, matcher.term == matcher.term.lowercased() {
+                    replacement = matcher.term.prefix(1).uppercased() + matcher.term.dropFirst()
+                }
+                // Skip matches that are already spelled right.
+                guard result[r] != replacement else { continue }
+                changes.append("\(result[r]) → \(replacement)")
+                result.replaceSubrange(r, with: replacement)
             }
         }
         return (result, changes)
@@ -78,14 +85,16 @@ final class Vocabulary {
     /// One compiled pattern per alias (and per term, for casing). Russian
     /// inflects borrowed names ("в телеграмме", "на гитхабе"), so a Cyrillic
     /// alias of five letters or more also matches with up to three trailing
-    /// letters; short aliases stay exact to avoid false hits.
+    /// letters; short aliases stay exact to avoid false hits. The term itself
+    /// is always exact: it is a real word, and a loose match would eat its
+    /// longer neighbours ("проде" must not swallow "проделал").
     private static func matchers(for entries: [VocabularyEntry]) -> [(regex: NSRegularExpression, term: String)] {
         var out: [(NSRegularExpression, String)] = []
         for entry in entries {
-            for alias in entry.aliases + [entry.term] where !alias.isEmpty {
-                let isCyrillic = alias.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
-                let suffix = (isCyrillic && alias.count >= 5) ? "[\\p{Cyrillic}]{0,3}" : ""
-                let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: alias) + suffix + "(?![\\p{L}\\p{N}])"
+            for (word, isAlias) in entry.aliases.map({ ($0, true) }) + [(entry.term, false)] where !word.isEmpty {
+                let isCyrillic = word.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+                let suffix = (isAlias && isCyrillic && word.count >= 5) ? "[\\p{Cyrillic}]{0,3}" : ""
+                let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: word) + suffix + "(?![\\p{L}\\p{N}])"
                 if let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
                     out.append((re, entry.term))
                 }

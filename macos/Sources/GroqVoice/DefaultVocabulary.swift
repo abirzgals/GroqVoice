@@ -12,11 +12,17 @@ enum DefaultVocabulary {
     # Left of the colon: the exact spelling you want pasted.
     # Right of the colon: what the recognizer actually writes for it (see "STT result" in the log),
     # separated by commas. Whole words only, case-insensitive. Lines starting with # are ignored.
-    # A term without aliases just fixes its own casing ("github" → "GitHub") and, on the
-    # on-device engine, is spotted acoustically.
+    # A term without aliases just fixes its own casing ("github" → "GitHub"). A lower-case
+    # term is an ordinary word and keeps its capital at the start of a sentence.
     #
-    # On-device (Parakeet): terms are Latin-script; Cyrillic misspellings go on the right as aliases.
+    # Cyrillic aliases of five letters or more also match inflected forms ("в телеграмме"),
+    # so keep short look-alikes of real words out of the right side.
     # Groq Whisper: the terms are also sent as the recognition prompt.
+
+    # Dev slang the recognizer mishears
+    прод: прот
+    закоммить: закамить, закомить
+    закоммитить: закамитить, закомитить
 
     # Own projects and company
     SitesPro: сайтспро, сайтс про, сайт спро
