@@ -22,7 +22,6 @@ Swift + AppKit, macOS 14+, Apple Silicon.
 | **Выделить текст**, hold Fn, сказать «сделай короче» / «переведи на латышский» / «исправь ошибки» | Результат заменяет выделение (нужна LLM; иконка фиолетовая). Просто надиктованный текст тоже заменит выделение |
 | То же на **нередактируемом** тексте (веб-страница, PDF, Finder) | Результат копируется в буфер обмена, в menu bar на 2 с значок буфера. Работает и для обычной диктовки без поля ввода |
 | **Esc** во время записи | Отменить запись (в том числе залоченную) |
-| **⌃⌥⌘R** | Запись активного экрана → .mov на Рабочий стол |
 
 Граница «тап»/«hold» — 250 мс (`pttHoldMs`), окно двойного тапа — 400 мс (`doubleTapWindowMs`).
 После отпускания клавиши запись продолжается ещё 250 мс (`releaseTailMs`), чтобы не срезать
@@ -37,10 +36,10 @@ Swift + AppKit, macOS 14+, Apple Silicon.
 ### Меню и настройки
 
 Меню в menu bar — только то, что переключают на ходу: статус хоткеев, **Recent** (клик копирует),
-**Paste Last Again**, **History…**, **Settings…** (⌘,), быстрые переключатели движка, хоткея,
-микрофона, языка и звука, Open Log, Record Screen, Quit.
+**Paste Last Again**, **History…**, **Settings…** (⌘,), **Dictionary & Snippets…**, выбор
+микрофона, Open Log, Quit. Движок, хоткей, язык и звук — в Settings.
 
-Всё остальное — в окне **Settings** (три вкладки, изменения применяются сразу, без OK):
+Всё остальное — в окне **Settings** (четыре вкладки, изменения применяются сразу, без OK):
 
 - **General** — клавиша push-to-talk (Fn или любой модификатор с обеих сторон; для Fn нужно
   System Settings → Keyboard → *Press 🌐 key to* → **Do Nothing**; Left ⌘/⌥ участвуют во всех
@@ -57,8 +56,8 @@ Swift + AppKit, macOS 14+, Apple Silicon.
   длина записи, порог тишины), размер истории, хранить last.wav, кнопки Open Log, Open Data
   Folder, Reset to Defaults.
 - **Recognition** — движок (Parakeet или Whisper via Groq) и фолбэк. Ниже две группы:
-  **Parakeet** (статус/загрузка модели, словарь и кнопка редактирования, акустический
-  бустинг, выгрузка модели по простою) и **Whisper via Groq** (статус ключа, цепочка моделей).
+  **Parakeet** (статус/загрузка модели, словарь и кнопка редактирования, выгрузка модели
+  по простою) и **Whisper via Groq** (статус ключа, цепочка моделей).
   Группа неактивного движка серая.
 - **Groq & LLM** — правка выделенного текста голосом (выделение читается в момент нажатия
   клавиши: через Accessibility, а где приложение его не отдаёт (Word, VS Code, терминалы,
@@ -134,7 +133,8 @@ Hugging Face в `~/Library/Application Support/GroqVoice/models/`, компил�
 
 ## Словарь
 
-У Parakeet нет параметра `prompt`, как у Whisper, поэтому словарь работает двумя механизмами:
+У Parakeet нет параметра `prompt`, как у Whisper, поэтому словарь работает заменой в тексте
+(акустический CTC-бустинг FluidAudio пробовали и убрали: на русской речи он давал ложные замены).
 
 1. **Алиасы → замена в тексте.** Строка `Coolify: кулифай, кулифи` заменяет в транскрипте
    любое из этих слов (целиком, без учёта регистра) на `Coolify`. Кириллические алиасы от
@@ -144,13 +144,6 @@ Hugging Face в `~/Library/Application Support/GroqVoice/models/`, компил�
    (смотри `STT result` в логе). Файл создаётся со стартовым набором (~60 терминов: свои
    проекты, хостинг и деплой, git, стек, сервисы, устройства) — шаблон в
    `DefaultVocabulary.swift`, дополняй по образцу.
-2. **Акустический бустинг (FluidAudio CTC word spotting), опционально.** Галка *Acoustic Term
-   Spotting (experimental)* в Parakeet Settings. Докачивает вспомогательную модель Parakeet CTC
-   110M (~106 МБ, в `~/Library/Application Support/FluidAudio/Models/`), которая ищет термины в
-   звуке и подменяет похожие слова транскрипта. Плюс ~0.1–0.2 с на фразу. По умолчанию
-   **выключено**: модель английская, и на русской речи с большим словарём она даёт ложные
-   замены («смету по сайту» → «SitesPro сайту»). Акустический «rescue» без текстового сходства
-   отключён всегда. Включай, если словарь маленький и термины латиницей.
 
 Проверено на синтетической фразе «Нужно задеплоить на Coolify новый билд, проверить логи в
 Docker и написать клиенту в Telegram»: без словаря — «кулифай», «декер», «Телеграм»; с
@@ -188,7 +181,8 @@ Docker и написать клиенту в Telegram»: без словаря �
   См. раздел «Словарь».
 - `snippets.txt` — сниппеты: `фраза = текст` (сказал фразу целиком → вставился текст, `\n` —
   перенос строки) и `фраза => инструкция` (для LLM в task-режиме).
-- `history.jsonl` — последние 50 диктовок (меню Recent).
+- `history.jsonl` — последние 50 диктовок (меню Recent); для перевода/правки/task хранится и оригинал
+  (History → Copy Original).
 - `log.txt` — лог с ротацией на 1 МБ.
 - `last.wav` — последняя запись (`"saveLastWav": false` чтобы не писать).
 - `models/` — модель Parakeet.
@@ -197,37 +191,46 @@ Docker и написать клиенту в Telegram»: без словаря �
 
 ```bash
 GroqVoice.app/Contents/MacOS/GroqVoice --download-model      # скачать/прогреть модель, распознать last.wav
-GroqVoice.app/Contents/MacOS/GroqVoice --transcribe file.wav [--vocab terms.txt] [--boost]  # распознать 16 kHz mono WAV локально
+GroqVoice.app/Contents/MacOS/GroqVoice --transcribe file.wav [--vocab terms.txt]  # распознать 16 kHz mono WAV локально
 GroqVoice.app/Contents/MacOS/GroqVoice --snapshot-ui out/   # отрисовать Settings и History в PNG и выйти
+# что приложение отдаёт Accessibility про поле в фокусе (нужен TCC-грант самого GroqVoice, поэтому через open):
+open -n -W -o out.txt GroqVoice.app --args --probe-ax com.anthropic.claudefordesktop [--manual]
 ```
+
+В логе у каждой строки миллисекунды, а у каждого дубля — разбивка задержки по этапам:
+`take: key released → delivered in 0.31s (tail 0 · stop 14 · probe 2 · stt 121 · context 6 · paste 9 ms)`.
 
 ## Архитектура
 
 | Файл | Что делает |
 |---|---|
-| `AppController.swift` | стейт-машина хоткея (tap/hold/lock), пайплайн запись → STT → paste, роутинг движков |
+| `AppController.swift` | пайплайн запись → STT → LLM → paste, роутинг движков, иконка в menu bar |
+| `PushToTalk.swift` | правила клавиши (hold / tap / double-tap lock / chord) как чистая стейт-машина: события → команды |
+| `TakePlan.swift` | что делать с распознанным: сниппет, правка выделения, действие клавиши, task, clean-up — без сети и UI, покрыто тестами |
 | `AppController+Menu.swift` | меню (строится при каждом открытии) и его действия |
-| `SettingsWindow.swift` | окно Settings (три вкладки, live-apply) и главное меню для ⌘C/⌘V в полях |
+| `SettingsWindow.swift` | окно Settings (четыре вкладки, live-apply) и главное меню для ⌘C/⌘V в полях |
 | `HistoryWindow.swift` | окно History: поиск, копирование, вставка в предыдущее приложение |
 | `DictionaryWindow.swift` | окно Dictionary & Snippets, диалог быстрого добавления термина |
 | `HotkeyMonitor.swift` | listen-only CGEventTap на несколько клавиш, `HotkeyKey` (Fn / Right ⌘ / …) |
 | `Recorder.swift` | AVAudioEngine → 16 kHz mono Int16 в памяти, выбор устройства |
 | `AudioDevices.swift` | CoreAudio: список входов, default, UID → ID |
-| `LocalSTT.swift` | Parakeet v3 через FluidAudio: загрузка, прогрев, распознавание, CTC-бустинг словаря |
+| `LocalSTT.swift` | Parakeet v3 через FluidAudio: загрузка, прогрев, распознавание |
 | `GroqClient.swift` / `ModelChain.swift` | Groq STT + chat с фолбэком по моделям и cooldown |
 | `Paster.swift` | ⌘V с полным восстановлением буфера или посимвольная печать |
-| `TextInsertion.swift` | контекст курсора через Accessibility (умные пробелы/регистр) и голосовые переносы строк |
+| `TextInsertion.swift` | Accessibility: поле в фокусе, выделение, контекст курсора (умные пробелы/регистр), `AXManualAccessibility` для Electron; голосовые переносы строк |
 | `History.swift` | history.jsonl + меню Recent |
 | `TaskRouter.swift` | детект task-режима, системные промпты (task, clean-up) |
 | `LocalLLM.swift` | Apple Foundation Models (macOS 26) как офлайн-LLM |
-| `Vocabulary.swift` | словарь: термины, алиасы → замена, prompt для Whisper, hot-reload |
-| `Snippets.swift` | сниппеты: мгновенное раскрытие фразы, описание для LLM, правка файла |
-| `ScreenRecorder.swift` | ⌃⌥⌘R запись экрана |
+| `Vocabulary.swift` | словарь: термины, алиасы → замена, prompt для Whisper |
+| `Snippets.swift` | сниппеты: мгновенное раскрытие фразы, описание для LLM |
+| `LineFile.swift` | общий для словаря и сниппетов файл «запись на строку»: hot-reload по mtime, правки не трогают комментарии |
+| `Config.swift` | config.json: синтезированный Codable, чтение поверх дефолтов (битое значение стоит только своего ключа) |
 
 ## Privacy
 
 Аудио не покидает Мак, пока движок — Parakeet. С Groq-движком (или фолбэком, или task-режимом,
-или LLM-чисткой) данные уходят только на `api.groq.com`. Ключ хранится локально. Телеметрии нет.
+или LLM-чисткой) данные уходят только на `api.groq.com`. Ключ хранится локально, папка данных
+закрыта правами `0700` (в логе и истории лежит всё надиктованное). Телеметрии нет.
 
 ## License
 

@@ -17,16 +17,22 @@
 - LLM для перевода/task/чистки: любой OpenAI-совместимый endpoint (`chatBaseURL`), по умолчанию Groq.
 - Свой репозиторий: origin = github.com/crcknaka/GroqVoice (private), upstream = abirzgals/GroqVoice.
   Коммиты — английские императивные, без упоминания AI.
-- Словарь: `Term: alias1, alias2` в vocabulary.txt → детерминированная замена алиасов в тексте
-  (всегда). CTC-бустинг FluidAudio (helper-модель 106 МБ в
-  `~/Library/Application Support/FluidAudio/Models/`) — опция `vocabularyBoosting`, по
-  умолчанию off: на русской речи с большим словарём даёт ложные замены.
+- Словарь: `Term: alias1, alias2` в vocabulary.txt → детерминированная замена алиасов в тексте.
+  Акустический CTC-бустинг FluidAudio удалён (на русской речи давал ложные замены).
 - Стартовый словарь — `DefaultVocabulary.swift`; у пользователя файл уже заполнен им.
 - Сниппеты (`Snippets.swift`): `фраза = текст` раскрывается мгновенно без LLM при точном совпадении
   всей фразы, `фраза => инструкция` — только для LLM в task-режиме. Оба списка редактируются в окне
   Dictionary (`DictionaryWindow.swift`), правки сохраняют комментарии и порядок в файлах.
 - Данные приложения: `~/Library/Application Support/GroqVoice/` (config.json, history.jsonl,
   vocabulary.txt, snippets.txt, log.txt, models/).
-- Headless-режимы для отладки: `--transcribe file.wav [--vocab terms.txt] [--boost]`, `--download-model`,
-  `--snapshot-ui dir` (PNG окон Settings/History без Screen Recording — свои окна можно снимать).
+- Headless-режимы для отладки: `--transcribe file.wav [--vocab terms.txt]`, `--download-model`,
+  `--snapshot-ui dir` (PNG окон Settings/History без Screen Recording — свои окна можно снимать),
+  `--probe-ax <bundle-id> [--manual]` (что приложение отдаёт Accessibility; запускать через
+  `open -n -W -o out.txt GroqVoice.app --args …`, иначе нет TCC-гранта).
+- Логика без UI вынесена и покрыта тестами: `PushToTalk.swift` (правила клавиши), `TakePlan.swift`
+  (маршрутизация дубля), `Config.decode(from:)`. Новая настройка = одно свойство в `Config`.
+- Accessibility: VS Code и форки не отдают поле в фокусе, и просить их нельзя
+  (`AXManualAccessibility` включает у них screen-reader-режим) — они в списке `monacoApps`
+  как «точно редактируемые». Остальным Electron-приложениям атрибут выставляется один раз на процесс.
+- В логе миллисекунды и разбивка задержки дубля по этапам (`take: … (stop · probe · stt · llm · context · paste)`).
 - Подробности и меню — `macos/README.md`.
