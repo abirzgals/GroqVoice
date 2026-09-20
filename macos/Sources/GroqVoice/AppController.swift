@@ -99,6 +99,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     var hotkeyStatus: HotkeyStatus = .needsAccessibility
     /// Menu/settings text for the local model row ("downloading 42%", "compiling…").
     var localModelStatus: String?
+    /// Set when the user answered "Not Now" to the model download this session.
+    private var modelDownloadDeclined = false
 
     private var takeKind: TakeKind = .dictate
     /// Text that was selected in the focused app when the take started.
@@ -172,7 +174,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         history.limit = config.historySize
         if !config.saveLastWav { try? FileManager.default.removeItem(at: Recorder.wavURL) }
         prepareRecorder()
-        if config.usesLocalEngine { localSTT.warmUpInBackground() }
+        // Picking the on-device engine is not by itself consent to spend 500 MB.
+        if config.usesLocalEngine { offerModelDownload() }
         syncLoginItem()
         if case .idle = phase { setIcon(.ready) }
     }
@@ -291,6 +294,33 @@ final class AppController: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Download Model")
         alert.addButton(withTitle: "Later")
         if alert.runModal() == .alertFirstButtonReturn { localSTT.warmUpInBackground() }
+    }
+
+    /// Starts the on-device model download, asking first — it is half a gigabyte,
+    /// and the user may be on a phone hotspot. Already downloaded: warms it up
+    /// silently. Declined once, it stays declined until the app is restarted or
+    /// the user presses Download in Settings, so a take never nags twice.
+    func offerModelDownload() {
+        if localSTT.isModelDownloaded { localSTT.warmUpInBackground(); return }
+        guard !modelDownloadDeclined else { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Download the on-device model?"
+        alert.informativeText = """
+        Recognizing speech on this Mac needs Parakeet v3 — a one-time download of about \
+        \(LocalSTT.approximateDownloadMB) MB, kept in Application Support across updates.
+
+        Progress is shown in the menu bar. Dictation keeps working through Groq while it arrives.
+        """
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn {
+            localSTT.warmUpInBackground()
+        } else {
+            modelDownloadDeclined = true
+            Log.write("local model download declined")
+        }
     }
 
     // MARK: - Hotkey state machine
@@ -581,8 +611,10 @@ final class AppController: NSObject, NSApplicationDelegate {
 
         if cfg.usesLocalEngine {
             if !localSTT.isModelDownloaded, cfg.sttFallback, hasKey, await probe.reachable() {
-                Log.write("STT: local model not downloaded yet → Groq for this take, model downloading in background")
-                localSTT.warmUpInBackground()
+                Log.write("STT: local model not downloaded yet → Groq for this take")
+                // Ask, but don't make the take wait on the answer: the dialog is
+                // scheduled while Groq transcribes what was just said.
+                Task { @MainActor in self.offerModelDownload() }
                 return try await cloud()
             }
             do {

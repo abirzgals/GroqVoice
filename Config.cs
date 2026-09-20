@@ -9,6 +9,20 @@ public sealed class Config
     [JsonPropertyName("transcriptionModel")] public string TranscriptionModel { get; set; } = "whisper-large-v3";
     [JsonPropertyName("chatModel")] public string ChatModel { get; set; } = "llama-3.3-70b-versatile";
 
+    // Which engine transcribes: "groq" (Whisper in the cloud, the default this
+    // app shipped with) or "parakeet" (NVIDIA Parakeet TDT v3 on this machine —
+    // offline, no API key, ~0.3 s per phrase, one-time 460 MB model download).
+    // Same names as the macOS build, so a config is readable on both.
+    [JsonPropertyName("sttEngine")] public string SttEngine { get; set; } = "groq";
+
+    // If the chosen engine can't serve a take (model missing, no network, API
+    // error), try the other one instead of failing the dictation.
+    [JsonPropertyName("sttFallback")] public bool SttFallback { get; set; } = true;
+
+    // Minutes of idle before the local model is dropped from RAM (~1.4 GB);
+    // 0 = keep it warm, which is what makes the next dictation instant.
+    [JsonPropertyName("localUnloadAfterMinutes")] public double LocalUnloadAfterMinutes { get; set; } = 0;
+
     // empty = auto-detect; whisper handles ru/en code-switching well in auto mode
     [JsonPropertyName("language")] public string Language { get; set; } = "";
 
@@ -85,6 +99,10 @@ public sealed class Config
     // differs — matching is case-insensitive.
     [JsonPropertyName("remoteWindowMarkers")] public string[] RemoteWindowMarkers { get; set; } =
         Array.Empty<string>();
+
+    [JsonIgnore]
+    public bool UsesLocalEngine =>
+        string.Equals(SttEngine, "parakeet", StringComparison.OrdinalIgnoreCase);
 
     public static string Dir => System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

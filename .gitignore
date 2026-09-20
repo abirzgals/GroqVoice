@@ -6,6 +6,12 @@ publish-sc/
 *.user
 .vs/
 
+# speech models are downloaded at runtime into %APPDATA%\GroqVoice\models —
+# never committed (the Parakeet one alone is 640 MB unpacked)
+models/
+*.onnx
+*.tar.bz2
+
 # local secrets / runtime data — must never end up in the repo
 config.json
 *.local.json

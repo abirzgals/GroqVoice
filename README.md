@@ -2,12 +2,12 @@
 
 # ⬇️ Download
 
-### 👉 **[GroqVoice-fd.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)** &nbsp;&nbsp; *(720 KB, recommended — needs [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0))*
+### 👉 **[GroqVoice-fd.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)** &nbsp;&nbsp; *(22 MB, recommended — needs [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0))*
 
-### 👉 **[GroqVoice-sc.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)** &nbsp;&nbsp; *(70 MB, self-contained — nothing else to install)*
+### 👉 **[GroqVoice-sc.exe](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)** &nbsp;&nbsp; *(77 MB, self-contained — nothing else to install)*
 
-[![Download recommended](https://img.shields.io/badge/⬇-GroqVoice--fd.exe%20%E2%80%94%20720%20KB-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)
-[![Download self-contained](https://img.shields.io/badge/⬇-GroqVoice--sc.exe%20%E2%80%94%2070%20MB-1f6feb?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)
+[![Download recommended](https://img.shields.io/badge/⬇-GroqVoice--fd.exe%20%E2%80%94%2022%20MB-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-fd.exe)
+[![Download self-contained](https://img.shields.io/badge/⬇-GroqVoice--sc.exe%20%E2%80%94%2077%20MB-1f6feb?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-sc.exe)
 [![All releases](https://img.shields.io/badge/All-Releases-6e7681?style=for-the-badge&logo=github&logoColor=white)](https://github.com/abirzgals/GroqVoice/releases)
 
 > Click any link above and the .exe starts downloading immediately — no need to dig through GitHub's UI.
@@ -46,17 +46,17 @@ Russian + English mixed dictation works out of the box.
 ## Что это / What it does
 
 - **Hot-key push-to-talk** — удерживаешь Win+Ctrl, говоришь, отпускаешь. Иконка в трее: 🟢 ready → 🔴 recording → 🟡 processing → 🟢.
-- **Whisper STT через Groq** — `whisper-large-v3`, авто-определение языка, Russian/English code-switching без переключения настроек.
+- **Два движка распознавания** — Whisper через Groq (`whisper-large-v3`, облако) или **Parakeet TDT v3 прямо на этом ПК** (офлайн, без API-ключа, ~0.35 с на фразу). Переключается в трее: Recognition → Parakeet v3; модель (460 МБ) скачивается по запросу, с подтверждением и процентами. Оба движка держат смешанную русско-английскую речь без смены настроек.
 - **Vocabulary file** — словарь редких слов / имён собственных / терминов биасит распознавание (см. ниже).
 - **Task mode** — если речь начинается с `task` / `задача` / `задание` (в первых 4 словах), transcript уходит в `llama-3.3-70b-versatile` и в фокусированное окно вставляется ответ модели, а не сама фраза.
-- **Tray-only** — никаких окон, autostart с Windows опционально, ~40 MB RAM, ~720 KB self-contained .exe.
-- **Filters** — пустые / слишком короткие записи (< 1 c, peak < 1%) не отправляются в Groq, экономя API-кредиты.
+- **Tray-only** — никаких окон, autostart с Windows опционально, ~40 MB RAM (~740 MB, пока загружена локальная модель).
+- **Filters** — пустые / слишком короткие записи (< 1 c, peak < 1%) не отправляются в распознавание, экономя API-кредиты и время.
 
 ---
 
 ## Установка / Install
 
-### Вариант 1 — Framework-dependent (рекомендуется, ~720 KB)
+### Вариант 1 — Framework-dependent (рекомендуется, ~22 MB)
 
 Требует [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (один раз ставится).
 
@@ -64,7 +64,7 @@ Russian + English mixed dictation works out of the box.
 2. Положи в любую постоянную папку (`%LOCALAPPDATA%\Programs\GroqVoice\` подходит).
 3. Запусти. Создастся `%APPDATA%\GroqVoice\config.json` — вставь в `groqApiKey` свой ключ с [console.groq.com](https://console.groq.com) и перезапусти приложение (Tray → Quit, потом запусти .exe ещё раз).
 
-### Вариант 2 — Self-contained (~70 MB)
+### Вариант 2 — Self-contained (~77 MB)
 
 Не требует ничего ставить дополнительно. Скачай `GroqVoice-sc.exe` из Releases.
 
@@ -104,6 +104,25 @@ cd GroqVoice
 
 ---
 
+## Локальное распознавание / On-device recognition
+
+Трей → **Recognition** → **Parakeet v3 (on this PC)**. Если модели ещё нет, приложение спросит,
+качать ли её (~460 МБ), и покажет окно с процентами; отказ оставляет облачный движок. Модель
+ложится в `%APPDATA%\GroqVoice\models\` — **в репозиторий и в .exe она не входит** и переживает
+обновления приложения. Удалить — там же в меню, «Delete downloaded model…».
+
+- **NVIDIA Parakeet TDT v3** (sherpa-onnx / ONNX Runtime, CPU): 25 языков, русский и английский
+  вперемешку внутри одной фразы, знаки препинания и заглавные расставляются сами.
+- Офлайн и без API-ключа: если Groq-ключ не введён, а модель скачана, приложение больше не просит ключ
+  при старте (он нужен только для task-режима).
+- Замерено здесь: 4.4 с речи → 0.35 с распознавания, загрузка модели ~2.4 с однократно (4 потока).
+  Модель держится в памяти (~740 МБ) ради мгновенного старта; `localUnloadAfterMinutes` это меняет.
+- Словарь работает и здесь: у локального движка нет «подсказки», поэтому термины применяются
+  к готовому тексту — строка `Coolify: кулифай, кулифи` чинит то, как распознаватель их пишет.
+- Проверить без микрофона: `GroqVoice.exe --transcribe запись.wav` печатает распознанный текст.
+
+---
+
 ## Конфигурация / Configuration
 
 `%APPDATA%\GroqVoice\config.json` (создаётся автоматически на первом старте; шаблон есть в [config.example.json](config.example.json)):
@@ -113,6 +132,9 @@ cd GroqVoice
 | `groqApiKey` | `""` | Ключ с [console.groq.com](https://console.groq.com). Хранится локально в `%APPDATA%`, в репозиторий не попадает. |
 | `transcriptionModel` | `whisper-large-v3` | STT-модель Groq. |
 | `chatModel` | `llama-3.3-70b-versatile` | LLM для task-режима. |
+| `sttEngine` | `groq` | `groq` — Whisper в облаке; `parakeet` — локально на этом ПК. Те же значения, что в macOS-сборке. |
+| `sttFallback` | `true` | Если выбранный движок не смог (нет модели, нет сети, ошибка API) — попробовать второй, а не терять диктовку. |
+| `localUnloadAfterMinutes` | `0` | Через сколько минут простоя выгрузить локальную модель из памяти. `0` = держать загруженной (быстрее). |
 | `language` | `""` (auto) | ISO-код (`ru`, `en`); пусто = автоопределение Whisper. |
 | `taskKeywords` | `["task","задача","задание"]` | Триггеры task-режима. Whole-word, регистронезависимо. |
 | `taskKeywordMaxWordPosition` | `4` | Сколько первых слов проверять на ключевик. |
@@ -128,7 +150,8 @@ cd GroqVoice
 
 ## Словарь / Vocabulary
 
-`%APPDATA%\GroqVoice\vocabulary.txt` — биасит Whisper к нужным словам через `prompt` параметр API.
+`%APPDATA%\GroqVoice\vocabulary.txt` — биасит Whisper к нужным словам через `prompt` параметр API,
+а для локального движка (у которого `prompt` нет) правит уже распознанный текст.
 
 ```text
 # Examples:
@@ -140,9 +163,17 @@ OAuth
 Postgres
 Tailscale
 Dockup
+
+# Term: alias, alias — как распознаватель это пишет → как надо
+Coolify: кулифай, кулифи
+Dockup: докап, докапп
 ```
 
 - Одна запись на строку. `#` — комментарии.
+- **`Term: alias, alias`** — необязательные алиасы: их вхождения заменяются на каноническое
+  написание. Русский склоняет заимствования («в телеграмме», «на гитхабе»), поэтому кириллический
+  алиас от пяти букв матчится и с тремя хвостовыми буквами; короткие — только точно. Формат общий
+  с macOS-сборкой.
 - **Регистр имеет значение** — пишешь `WhiteBIT`, Whisper тоже так напишет.
 - Hot-reload: после `Ctrl+S` следующий Win+Ctrl уже использует обновлённый список (отслеживается mtime).
 - Лимит ~700 символов (Whisper принимает до 224 токенов в `prompt`); при переполнении срезается с конца по запятой.

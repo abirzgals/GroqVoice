@@ -12,6 +12,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly Hotkey _hotkey;
     private readonly Recorder _rec = new();
     private readonly Groq _groq;
+    private readonly LocalStt _local = new();
     private readonly NotifyIcon _tray;
     private readonly SynchronizationContext _ui;
 
@@ -28,6 +29,9 @@ public sealed class TrayContext : ApplicationContext
     private ToolStripMenuItem? _headerItem;
     private ToolStripMenuItem? _assignVoiceItem;
     private ToolStripMenuItem? _assignShotItem;
+    private ToolStripMenuItem? _engineGroqItem;
+    private ToolStripMenuItem? _engineLocalItem;
+    private ToolStripMenuItem? _modelItem;
 
     public TrayContext(Config cfg)
     {
@@ -73,6 +77,16 @@ public sealed class TrayContext : ApplicationContext
         _tray.ContextMenuStrip = BuildMenu();
         RefreshHotkeyLabels();
 
+        _local.SetUnloadAfterMinutes(_cfg.LocalUnloadAfterMinutes);
+        if (_cfg.UsesLocalEngine)
+        {
+            // Load at startup so the first dictation is as quick as the next one.
+            // A missing model is not nagged about here — the user picks the engine
+            // in the menu, and that is where the download is offered.
+            if (_local.IsModelInstalled) _local.WarmUpInBackground();
+            else Log.Warn("engine=parakeet but the model is not downloaded — dictation will use Groq");
+        }
+
         if (_cfg.Autostart) Autostart.Enable(Application.ExecutablePath);
     }
 
@@ -93,6 +107,20 @@ public sealed class TrayContext : ApplicationContext
         m.Items.Add(_assignShotItem);
 
         m.Items.Add(new ToolStripSeparator());
+
+        var engine = new ToolStripMenuItem("Recognition");
+        _engineGroqItem = new ToolStripMenuItem("Groq (cloud Whisper)");
+        _engineGroqItem.Click += (_, _) => SetEngine("groq");
+        _engineLocalItem = new ToolStripMenuItem("Parakeet v3 (on this PC)");
+        _engineLocalItem.Click += (_, _) => SetEngine("parakeet");
+        _modelItem = new ToolStripMenuItem("Download model…");
+        _modelItem.Click += (_, _) => ModelMenuClicked();
+        engine.DropDownItems.AddRange(new ToolStripItem[]
+        {
+            _engineGroqItem, _engineLocalItem, new ToolStripSeparator(), _modelItem,
+        });
+        engine.DropDownOpening += (_, _) => RefreshEngineLabels();
+        m.Items.Add(engine);
 
         var setup = new ToolStripMenuItem("Setup / change API key…");
         setup.Click += (_, _) =>
@@ -262,6 +290,86 @@ public sealed class TrayContext : ApplicationContext
 
     // NotifyIcon.Text throws above 63 characters.
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
+
+    private void RefreshEngineLabels()
+    {
+        bool local = _cfg.UsesLocalEngine;
+        bool installed = ModelDownload.IsInstalled;
+
+        if (_engineGroqItem != null) _engineGroqItem.Checked = !local;
+        if (_engineLocalItem != null)
+        {
+            _engineLocalItem.Checked = local;
+            _engineLocalItem.Text = installed
+                ? "Parakeet v3 (on this PC)"
+                : $"Parakeet v3 (on this PC) — needs a {ModelDownload.DownloadMB} MB download";
+        }
+        if (_modelItem != null)
+            _modelItem.Text = installed ? "Delete downloaded model…" : "Download model…";
+    }
+
+    /// <summary>
+    /// Switches engines. Choosing the local one without the model offers the
+    /// download; declining leaves the engine on Groq rather than on a setting
+    /// that cannot work.
+    /// </summary>
+    private void SetEngine(string engine)
+    {
+        bool wantsLocal = string.Equals(engine, "parakeet", StringComparison.OrdinalIgnoreCase);
+        if (wantsLocal && !ModelDownload.IsInstalled)
+        {
+            bool accepted = ModelDownloadForm.Prompt(null, onInstalled: () =>
+            {
+                _cfg.SttEngine = "parakeet";
+                _cfg.Save();
+                _local.WarmUpInBackground();
+                RefreshEngineLabels();
+                ShowBalloon("GroqVoice", "Local recognition is ready — dictation no longer leaves this PC.",
+                            ToolTipIcon.Info);
+                Log.Info("engine switched to parakeet (model downloaded)");
+            });
+            if (!accepted) Log.Info("local engine declined at the download prompt");
+            return;
+        }
+
+        _cfg.SttEngine = wantsLocal ? "parakeet" : "groq";
+        _cfg.Save();
+        if (wantsLocal) _local.WarmUpInBackground(); else _local.Unload();
+        RefreshEngineLabels();
+        Log.Info($"engine switched to {_cfg.SttEngine}");
+    }
+
+    private void ModelMenuClicked()
+    {
+        if (!ModelDownload.IsInstalled)
+        {
+            ModelDownloadForm.Prompt(null, onInstalled: () =>
+            {
+                RefreshEngineLabels();
+                if (_cfg.UsesLocalEngine) _local.WarmUpInBackground();
+            });
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            $"Delete the downloaded Parakeet model?\n\n{ModelDownload.ModelDir}\n\n" +
+            "Recognition switches back to Groq. You can download it again later.",
+            "GroqVoice — delete local model", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (answer != DialogResult.Yes) return;
+
+        try
+        {
+            _local.Unload();
+            ModelDownload.Remove();
+            if (_cfg.UsesLocalEngine) { _cfg.SttEngine = "groq"; _cfg.Save(); }
+            RefreshEngineLabels();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("could not delete the model", ex);
+            MessageBox.Show(ex.Message, "GroqVoice", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
 
     private PasteOptions BuildPasteOptions() => new()
     {
@@ -504,9 +612,7 @@ public sealed class TrayContext : ApplicationContext
         {
             try
             {
-                var (vocabPrompt, vocabCount) = Vocabulary.LoadPrompt();
-                if (vocabCount > 0) Log.Info($"vocabulary: {vocabCount} terms ({vocabPrompt.Length} chars) sent as Whisper prompt");
-                var transcript = await _groq.TranscribeAsync(wav, vocabPrompt, ct).ConfigureAwait(false);
+                var transcript = await TranscribeAsync(wav, ct).ConfigureAwait(false);
                 Log.Info($"STT result: \"{Snip(transcript)}\"");
                 if (string.IsNullOrWhiteSpace(transcript)) return;
 
@@ -545,6 +651,42 @@ public sealed class TrayContext : ApplicationContext
                 _ui.Post(_ => { _tray.Icon = _idleIcon; _tray.Text = "GroqVoice — ready"; }, null);
             }
         });
+    }
+
+    /// <summary>
+    /// Runs the audio through the configured engine. Whichever one is chosen, a
+    /// failure falls back to the other when <see cref="Config.SttFallback"/> is on:
+    /// a missing model or a dead network should cost a second, not the dictation.
+    /// </summary>
+    private async Task<string> TranscribeAsync(byte[] wav, CancellationToken ct)
+    {
+        bool local = _cfg.UsesLocalEngine;
+        // The local engine takes no prompt, so vocabulary terms are applied to its
+        // output as plain text instead; Groq keeps getting them as a Whisper prompt.
+        var (vocabPrompt, vocabCount) = Vocabulary.LoadPrompt();
+
+        try
+        {
+            if (local)
+            {
+                var text = await Task.Run(() => _local.Transcribe(wav, ct), ct).ConfigureAwait(false);
+                return Vocabulary.ApplyAliases(text);
+            }
+
+            if (vocabCount > 0)
+                Log.Info($"vocabulary: {vocabCount} terms ({vocabPrompt.Length} chars) sent as Whisper prompt");
+            return await _groq.TranscribeAsync(wav, vocabPrompt, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested && _cfg.SttFallback)
+        {
+            Log.Warn($"{(local ? "local" : "Groq")} STT failed ({ex.Message}) — falling back to " +
+                     $"{(local ? "Groq" : "local")}");
+            if (local)
+                return await _groq.TranscribeAsync(wav, vocabPrompt, ct).ConfigureAwait(false);
+
+            var text = await Task.Run(() => _local.Transcribe(wav, ct), ct).ConfigureAwait(false);
+            return Vocabulary.ApplyAliases(text);
+        }
     }
 
     private static string Snip(string s, int n = 200) =>
