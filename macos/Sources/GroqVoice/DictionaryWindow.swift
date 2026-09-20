@@ -387,6 +387,6 @@ enum QuickVocabularyAdd {
         guard !t.isEmpty else { return }
         app.vocabulary.add(term: t, aliases: aliases.stringValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
         Log.write("vocabulary: added \(t)")
-        app.dictionaryWindowLoaded ? app.dictionaryWindow.reloadIfVisible() : ()
+        app.dictionaryWindow?.reloadIfVisible()
     }
 }

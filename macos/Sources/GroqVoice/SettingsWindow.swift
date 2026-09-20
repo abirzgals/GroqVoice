@@ -94,7 +94,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let downloadButton = NSButton(title: "Download Model…", target: nil, action: nil)
     private let vocabLabel = NSTextField(labelWithString: "")
     private let editVocabButton = NSButton(title: "Edit Vocabulary…", target: nil, action: nil)
-    private let boostingCheck = NSButton(checkboxWithTitle: "Acoustic term spotting (experimental)", target: nil, action: nil)
     private let unloadField = NSTextField()
     private let parakeetBox = NSBox()
     private let groqKeyStatus = NSTextField(labelWithString: "")
@@ -129,9 +128,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(tab: Int? = nil) {
+    func show() {
         refresh()
-        if let tab { tabs.selectTabViewItem(at: tab) }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
@@ -187,7 +185,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         hotkeyPopup.addItems(withTitles: HotkeyKey.allCases.map(\.title))
         bind(hotkeyPopup) { [unowned self] _ in
             let key = HotkeyKey.allCases[self.hotkeyPopup.indexOfSelectedItem]
-            self.app.config.hotkey = key.rawValue
+            self.app.config.hotkey = key
             self.app.config.setAction(nil, for: key)  // the main key can't also carry an action
             self.commit()
             self.showCaveat(for: key)
@@ -201,9 +199,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
                 switch r.action.indexOfSelectedItem {
                 case 1:
                     let lang = Config.translateLanguages[max(0, r.language.indexOfSelectedItem)].code
-                    self.app.config.setAction(KeyAction(key: r.key.rawValue, kind: "translate", language: lang), for: r.key)
+                    self.app.config.setAction(KeyAction(key: r.key, kind: .translate, language: lang), for: r.key)
                 case 2:
-                    self.app.config.setAction(KeyAction(key: r.key.rawValue, kind: "prompt", prompt: r.prompt.stringValue), for: r.key)
+                    self.app.config.setAction(KeyAction(key: r.key, kind: .prompt, prompt: r.prompt.stringValue), for: r.key)
                 default:
                     self.app.config.setAction(nil, for: r.key)
                 }
@@ -233,7 +231,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
         pastePopup.addItems(withTitles: ["Paste with ⌘V (fast)", "Type keystrokes (remote desktops, odd apps)"])
         bind(pastePopup) { [unowned self] _ in
-            self.app.config.pasteMode = self.pastePopup.indexOfSelectedItem == 1 ? PasteMode.type.rawValue : PasteMode.paste.rawValue
+            self.app.config.pasteMode = self.pastePopup.indexOfSelectedItem == 1 ? .type : .paste
             self.commit()
         }
         bindCheck(restoreClipboardCheck) { [unowned self] on in self.app.config.restoreClipboard = on }
@@ -247,8 +245,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         bindNumber(holdField, min: 50, max: 2000) { [unowned self] v in self.app.config.pttHoldMs = v }
         bindNumber(doubleTapField, min: 100, max: 2000) { [unowned self] v in self.app.config.doubleTapWindowMs = v }
         bindNumber(tailField, min: 0, max: 2000) { [unowned self] v in self.app.config.releaseTailMs = v }
-        bindNumber(minTakeField, min: 0, max: 10, decimals: 2) { [unowned self] v in self.app.config.minRecordingSeconds = v }
-        bindNumber(silenceField, min: 0, max: 100, decimals: 2) { [unowned self] v in self.app.config.silencePeakPercent = v }
+        bindNumber(minTakeField, min: 0, max: 10) { [unowned self] v in self.app.config.minRecordingSeconds = v }
+        bindNumber(silenceField, min: 0, max: 100) { [unowned self] v in self.app.config.silencePeakPercent = v }
         bindNumber(historyField, min: 1, max: 1000) { [unowned self] v in self.app.config.historySize = Int(v) }
 
         languageHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -303,7 +301,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func buildRecognition() -> NSStackView {
         let engineTarget = ActionTarget { [unowned self] sender in
-            self.app.config.sttEngine = (sender as? NSButton) === self.groqRadio ? "groq" : "parakeet"
+            self.app.config.sttEngine = (sender as? NSButton) === self.groqRadio ? .groq : .parakeet
             self.commit()
         }
         targets.append(engineTarget)
@@ -314,14 +312,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         bindCheck(fallbackCheck) { [unowned self] on in self.app.config.sttFallback = on }
 
         bindButton(downloadButton) { [unowned self] in
-            self.app.localSTT.warmUpInBackground(vocabularyFile: self.app.config.vocabularyBoosting ? Vocabulary.fileURL : nil)
+            self.app.localSTT.warmUpInBackground()
             self.refresh()
         }
         bindButton(editVocabButton) { [unowned self] in self.app.menuShowDictionary() }
-        bindCheck(boostingCheck) { [unowned self] on in self.app.config.vocabularyBoosting = on }
         bindNumber(unloadField, min: 0, max: 1440) { [unowned self] v in self.app.config.localUnloadAfterMinutes = v }
         bindText(sttModelsField) { [unowned self] text in
-            let models = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let models = Self.list(text)
             if !models.isEmpty { self.app.config.transcriptionModels = models }
         }
 
@@ -335,8 +332,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             [label("Model:"), row(modelStatusLabel, downloadButton)],
             [label("Vocabulary:"), row(vocabLabel, editVocabButton)],
             [empty(), hint("Names and jargon with the misspellings the recognizer produces; they are replaced by the term. Edit in the Dictionary window or via “Add Vocabulary Term…” in the menu.")],
-            [empty(), boostingCheck],
-            [empty(), hint("Spots the terms in the audio with a second (English) model, ~106 MB. Off by default: with big vocabularies and Russian speech it makes false replacements.")],
             [label("Unload model after:"), row(unloadField, unit("min"), hint("0 = keep it warm in memory"))],
         ])
         configureBox(parakeetBox, title: "Parakeet v3 (on this Mac)", content: parakeetGrid)
@@ -370,13 +365,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
         bindText(chatKeyField) { [unowned self] text in self.app.config.chatApiKey = text.trimmingCharacters(in: .whitespacesAndNewlines) }
         bindText(chatModelsField) { [unowned self] text in
-            let models = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let models = Self.list(text)
             if !models.isEmpty { self.app.config.chatModels = models }
         }
         bindCheck(cleanupCheck) { [unowned self] on in self.app.config.cleanupTranscript = on }
         bindCheck(editSelectionCheck) { [unowned self] on in self.app.config.editSelection = on }
         bindText(keywordsField, width: 190) { [unowned self] text in
-            let words = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let words = Self.list(text)
             if !words.isEmpty { self.app.config.taskKeywords = words }
         }
         bindNumber(keywordPosField, min: 1, max: 10) { [unowned self] v in self.app.config.taskKeywordMaxWordPosition = Int(v) }
@@ -436,9 +431,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         defer { refreshing = false }
         let c = app.config
 
-        hotkeyPopup.selectItem(at: HotkeyKey.allCases.firstIndex(of: c.hotkeyKey) ?? 0)
+        hotkeyPopup.selectItem(at: HotkeyKey.allCases.firstIndex(of: c.hotkey) ?? 0)
         for (i, r) in keyRows.enumerated() {
-            keysGrid.row(at: i).isHidden = r.key == c.hotkeyKey
+            keysGrid.row(at: i).isHidden = r.key == c.hotkey
             let action = c.action(for: r.key)
             r.action.selectItem(at: action == nil ? 0 : (action!.isTranslate ? 1 : 2))
             r.language.isHidden = !(action?.isTranslate ?? false)
@@ -468,7 +463,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         languageHint.stringValue = c.usesLocalEngine
             ? "Parakeet: Auto keeps mixed Russian/English; a fixed language only filters the alphabet (Cyrillic vs Latin)."
             : "Whisper: Auto detects the language per phrase; a fixed language forces it."
-        pastePopup.selectItem(at: c.pasteModeValue == .type ? 1 : 0)
+        pastePopup.selectItem(at: c.pasteMode == .type ? 1 : 0)
         restoreClipboardCheck.state = c.restoreClipboard ? .on : .off
         soundsCheck.state = c.playFeedbackSounds ? .on : .off
         loginCheck.state = c.autostart ? .on : .off
@@ -499,7 +494,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         let terms = app.vocabulary.termCount
         let aliases = app.vocabulary.entries.reduce(0) { $0 + $1.aliases.count }
         vocabLabel.stringValue = terms == 0 ? "empty" : "\(terms) terms, \(aliases) aliases"
-        boostingCheck.state = c.vocabularyBoosting ? .on : .off
         unloadField.stringValue = format(c.localUnloadAfterMinutes)
         groqKeyStatus.stringValue = c.groqApiKey.isEmpty ? "not set — see the Groq & LLM tab" : "set"
         sttModelsField.stringValue = c.transcriptionModels.joined(separator: ", ")
@@ -611,8 +605,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
     }
 
-    private func bindNumber(_ field: NSTextField, min: Double, max: Double, decimals: Int = 0,
-                            _ handler: @escaping (Double) -> Void) {
+    private func bindNumber(_ field: NSTextField, min: Double, max: Double, _ handler: @escaping (Double) -> Void) {
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(equalToConstant: 70).isActive = true
         field.alignment = .right
@@ -624,7 +617,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             self.app.settingsChanged()
             self.refresh()
         }
-        _ = decimals
+    }
+
+    /// "a, b, c" → ["a", "b", "c"]
+    private static func list(_ text: String) -> [String] {
+        text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     private func format(_ value: Double) -> String {

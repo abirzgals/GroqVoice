@@ -2,7 +2,7 @@ import Foundation
 
 /// One line of vocabulary.txt: a canonical spelling plus optional aliases —
 /// the ways the recognizer tends to write it ("Coolify: кулифай, кулифи").
-struct VocabularyEntry: Equatable {
+struct VocabularyEntry: Equatable, LineFileEntry {
     var term: String
     var aliases: [String]
     /// Line in the file (kept so edits preserve comments and sections).
@@ -19,43 +19,50 @@ final class Vocabulary {
     static var fileURL: URL { Config.supportDir.appendingPathComponent("vocabulary.txt") }
 
     let fileURL: URL
-    private var lines: [String] = []
-    private var cachedEntries: [VocabularyEntry] = []
-    private var cachedMatchers: [(regex: NSRegularExpression, term: String)] = []
-    private var cachedPrompt = ""
-    private var cachedMtime: Date?
-    private var loaded = false
-    private let maxPromptChars = 700
+    private let file: LineFile<VocabularyEntry>
+    private var matchers: [(regex: NSRegularExpression, term: String)] = []
+    private var termsPrompt = ""
+    private static let maxPromptChars = 700
 
     init(fileURL: URL = Vocabulary.fileURL) {
         self.fileURL = fileURL
         if fileURL == Vocabulary.fileURL, !FileManager.default.fileExists(atPath: fileURL.path) {
             try? DefaultVocabulary.text.data(using: .utf8)!.write(to: fileURL)
         }
+        file = LineFile(url: fileURL, parse: Vocabulary.parse)
+        file.onLoad = { [unowned self] entries in
+            matchers = Vocabulary.matchers(for: entries)
+            var joined = entries.map(\.term).joined(separator: ", ")
+            if joined.count > Vocabulary.maxPromptChars {
+                let cut = joined.prefix(Vocabulary.maxPromptChars)
+                joined = cut.lastIndex(of: ",").map { String(cut[..<$0]) } ?? String(cut)
+            }
+            termsPrompt = joined
+            if !entries.isEmpty {
+                Log.write("vocabulary loaded: \(entries.count) terms, \(entries.reduce(0) { $0 + $1.aliases.count }) aliases")
+            }
+        }
     }
 
-    var entries: [VocabularyEntry] {
-        reloadIfNeeded()
-        return cachedEntries
-    }
+    var entries: [VocabularyEntry] { file.entries }
 
     /// Number of real entries (ignores comments and blank lines).
     var termCount: Int { entries.count }
 
     /// Canonical terms joined for Whisper's `prompt` parameter (≤ ~700 chars).
     func prompt() -> String {
-        reloadIfNeeded()
-        return cachedPrompt
+        _ = file.entries  // picks up a changed file
+        return termsPrompt
     }
 
     /// Replaces whole-word occurrences of any alias (and of the term itself in
     /// other casing) with the canonical term. Returns the text and the list of
     /// replacements made, for the log.
     func applyAliases(to text: String) -> (text: String, changes: [String]) {
-        reloadIfNeeded()
+        _ = file.entries  // picks up a changed file
         var result = text
         var changes: [String] = []
-        for matcher in cachedMatchers {
+        for matcher in matchers {
             let matches = matcher.regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
             guard !matches.isEmpty else { continue }
             for m in matches.reversed() {
@@ -107,76 +114,30 @@ final class Vocabulary {
 
     // MARK: - Editing (preserves comments and sections)
 
-    /// Appends under "# Your entries" when that section exists, else at the end.
-    func add(term: String, aliases: [String]) {
-        reloadIfNeeded()
+    private static func entry(term: String, aliases: [String]) -> VocabularyEntry? {
         let entry = VocabularyEntry(term: term.trimmingCharacters(in: .whitespaces),
                                     aliases: aliases.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-        guard !entry.term.isEmpty else { return }
+        return entry.term.isEmpty ? nil : entry
+    }
+
+    /// Appends under "# Your entries" when that section exists, else at the end.
+    func add(term: String, aliases: [String]) {
+        guard let entry = Vocabulary.entry(term: term, aliases: aliases) else { return }
+        _ = file.entries
+        let lines = file.lines
+        var insertAt: Int?
         if let header = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).lowercased() == "# your entries" }) {
-            var insertAt = header + 1
-            while insertAt < lines.count, !lines[insertAt].trimmingCharacters(in: .whitespaces).isEmpty,
-                  !lines[insertAt].hasPrefix("#") {
-                insertAt += 1
-            }
-            lines.insert(entry.fileLine, at: insertAt)
-        } else {
-            lines.append(entry.fileLine)
+            var i = header + 1
+            while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).isEmpty, !lines[i].hasPrefix("#") { i += 1 }
+            insertAt = i
         }
-        save()
+        file.insert(entry, atLine: insertAt)
     }
 
     func update(at index: Int, term: String, aliases: [String]) {
-        reloadIfNeeded()
-        guard cachedEntries.indices.contains(index) else { return }
-        var entry = cachedEntries[index]
-        entry.term = term.trimmingCharacters(in: .whitespaces)
-        entry.aliases = aliases.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        guard !entry.term.isEmpty else { return }
-        lines[entry.lineIndex] = entry.fileLine
-        save()
+        guard let entry = Vocabulary.entry(term: term, aliases: aliases) else { return }
+        file.replace(at: index, with: entry)
     }
 
-    func remove(at index: Int) {
-        reloadIfNeeded()
-        guard cachedEntries.indices.contains(index) else { return }
-        lines.remove(at: cachedEntries[index].lineIndex)
-        save()
-    }
-
-    private func save() {
-        try? (lines.joined(separator: "\n") + "\n").data(using: .utf8)?.write(to: fileURL)
-        loaded = false
-        reloadIfNeeded()
-    }
-
-    private func reloadIfNeeded() {
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date) ?? nil
-        if loaded, mtime == cachedMtime { return }
-        loaded = true
-        cachedMtime = mtime
-
-        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
-            lines = []
-            cachedEntries = []
-            cachedMatchers = []
-            cachedPrompt = ""
-            return
-        }
-        lines = text.components(separatedBy: "\n")
-        if lines.last == "" { lines.removeLast() }
-        cachedEntries = Vocabulary.parse(lines)
-
-        cachedMatchers = Vocabulary.matchers(for: cachedEntries)
-        var joined = cachedEntries.map(\.term).joined(separator: ", ")
-        if joined.count > maxPromptChars {
-            let cut = joined.prefix(maxPromptChars)
-            joined = cut.lastIndex(of: ",").map { String(cut[..<$0]) } ?? String(cut)
-        }
-        cachedPrompt = joined
-        if !cachedEntries.isEmpty {
-            let aliasCount = cachedEntries.reduce(0) { $0 + $1.aliases.count }
-            Log.write("vocabulary loaded: \(cachedEntries.count) terms, \(aliasCount) aliases")
-        }
-    }
+    func remove(at index: Int) { file.remove(at: index) }
 }

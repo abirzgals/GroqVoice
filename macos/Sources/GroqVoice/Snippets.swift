@@ -3,12 +3,12 @@ import Foundation
 /// One line of snippets.txt.
 ///   phrase = text          — say the phrase alone, the text is pasted (no LLM)
 ///   phrase => instruction  — an instruction the LLM applies in task mode
-struct SnippetEntry: Equatable {
+struct SnippetEntry: Equatable, LineFileEntry {
     var phrase: String
     var text: String
     var isInstruction: Bool
     /// Line in the file (kept so edits preserve comments and order).
-    var lineIndex: Int
+    var lineIndex = 0
 
     /// The text as stored on one line: real line breaks become `\n`.
     var fileLine: String {
@@ -38,22 +38,20 @@ final class Snippets {
     """
 
     let fileURL: URL
-    private var lines: [String] = []
-    private var cachedEntries: [SnippetEntry] = []
-    private var cachedMtime: Date?
-    private var loaded = false
+    private let file: LineFile<SnippetEntry>
 
     init(fileURL: URL = Snippets.fileURL) {
         self.fileURL = fileURL
         if fileURL == Snippets.fileURL, !FileManager.default.fileExists(atPath: fileURL.path) {
             try? Snippets.template.data(using: .utf8)!.write(to: fileURL)
         }
+        file = LineFile(url: fileURL, parse: Snippets.parse)
+        file.onLoad = { entries in
+            if !entries.isEmpty { Log.write("snippets loaded: \(entries.count) entries") }
+        }
     }
 
-    var entries: [SnippetEntry] {
-        reloadIfNeeded()
-        return cachedEntries
-    }
+    var entries: [SnippetEntry] { file.entries }
 
     /// Lower-cased, punctuation stripped, whitespace collapsed — how spoken
     /// phrases are compared.
@@ -93,45 +91,17 @@ final class Snippets {
     // MARK: - Editing (preserves comments and order)
 
     func add(phrase: String, text: String, isInstruction: Bool) {
-        reloadIfNeeded()
-        let entry = SnippetEntry(phrase: phrase.trimmingCharacters(in: .whitespaces), text: text,
-                                 isInstruction: isInstruction, lineIndex: lines.count)
-        lines.append(entry.fileLine)
-        save()
+        file.insert(SnippetEntry(phrase: phrase.trimmingCharacters(in: .whitespaces), text: text, isInstruction: isInstruction))
     }
 
     func update(at index: Int, phrase: String, text: String, isInstruction: Bool) {
-        reloadIfNeeded()
-        guard cachedEntries.indices.contains(index) else { return }
-        var entry = cachedEntries[index]
-        entry.phrase = phrase.trimmingCharacters(in: .whitespaces)
-        entry.text = text
-        entry.isInstruction = isInstruction
-        lines[entry.lineIndex] = entry.fileLine
-        save()
+        file.replace(at: index, with: SnippetEntry(phrase: phrase.trimmingCharacters(in: .whitespaces), text: text,
+                                                   isInstruction: isInstruction))
     }
 
-    func remove(at index: Int) {
-        reloadIfNeeded()
-        guard cachedEntries.indices.contains(index) else { return }
-        lines.remove(at: cachedEntries[index].lineIndex)
-        save()
-    }
+    func remove(at index: Int) { file.remove(at: index) }
 
-    // MARK: - File I/O
-
-    private func reloadIfNeeded() {
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date) ?? nil
-        if loaded, mtime == cachedMtime { return }
-        loaded = true
-        cachedMtime = mtime
-        lines = (try? String(contentsOf: fileURL, encoding: .utf8))?.components(separatedBy: "\n") ?? []
-        if lines.last == "" { lines.removeLast() }
-        cachedEntries = Snippets.parse(lines)
-        if !cachedEntries.isEmpty {
-            Log.write("snippets loaded: \(cachedEntries.count) entries")
-        }
-    }
+    // MARK: - Parsing
 
     static func parse(_ lines: [String]) -> [SnippetEntry] {
         var out: [SnippetEntry] = []
@@ -172,11 +142,5 @@ final class Snippets {
         }
         if escaped { out.append("\\") }
         return out
-    }
-
-    private func save() {
-        try? (lines.joined(separator: "\n") + "\n").data(using: .utf8)?.write(to: fileURL)
-        loaded = false  // re-read: mtime changed, indices may have shifted
-        reloadIfNeeded()
     }
 }

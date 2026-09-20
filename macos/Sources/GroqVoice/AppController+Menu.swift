@@ -1,18 +1,17 @@
 import Cocoa
 
-/// Status-bar menu: what the hotkeys do, recent dictations, quick switches
-/// for the things you change while working (engine, key, microphone,
-/// language, sounds). Everything else lives in Settings. Rebuilt each time it
-/// opens (NSMenuDelegate) so it is always current.
+/// Status-bar menu: what the hotkeys do, recent dictations, the microphone
+/// switch. Everything else lives in Settings. Rebuilt each time it opens
+/// (NSMenuDelegate) so it is always current.
 extension AppController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.autoenablesItems = false
         menu.removeAllItems()
 
         if hotkeyStatus == .active {
-            menu.addItem(status("Hold \(config.hotkeyKey.title) to talk · double-tap to lock"))
+            menu.addItem(status("Hold \(config.hotkey.title) to talk · double-tap to lock"))
             for action in config.activeKeyActions {
-                menu.addItem(status("Hold \(action.hotkeyKey?.title ?? action.key): \(action.summary)"))
+                menu.addItem(status("Hold \(action.key.title): \(action.summary)"))
             }
         } else {
             menu.addItem(status("Hotkey inactive — permission missing"))
@@ -35,20 +34,15 @@ extension AppController: NSMenuDelegate {
         menu.addItem(item("Settings…", #selector(menuShowSettings), key: ","))
         menu.addItem(item("Dictionary & Snippets…", #selector(menuShowDictionary)))
         menu.addItem(item("Add Vocabulary Term…", #selector(menuQuickAddTerm)))
-        menu.addItem(engineMenuItem())
-        menu.addItem(hotkeyMenuItem())
         menu.addItem(microphoneMenuItem())
-        menu.addItem(languageMenuItem())
-        menu.addItem(check("Sound Feedback", #selector(menuToggleSounds), config.playFeedbackSounds))
+        if let text = localModelStatus { menu.addItem(status("Parakeet model: \(text)")) }
         menu.addItem(.separator())
 
         menu.addItem(item("Open Log", #selector(menuOpenLog)))
-        menu.addItem(item(screenRecorder.isRecording ? "Stop Screen Recording  (⌃⌥⌘R)" : "Record Screen  (⌃⌥⌘R)",
-                          #selector(toggleScreenRecording)))
         menu.addItem(.separator())
         menu.addItem(item("Quit GroqVoice", #selector(menuQuit), key: "q"))
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
-        menu.addItem(status("GroqVoice \(version) · Parakeet v3"))
+        menu.addItem(status("GroqVoice \(version) · \(config.usesLocalEngine ? "Parakeet v3" : "Whisper via Groq")"))
     }
 
     // MARK: - Submenus
@@ -64,52 +58,9 @@ extension AppController: NSMenuDelegate {
             for entry in entries {
                 let row = item(entry.menuTitle, #selector(menuCopyRecent(_:)))
                 row.representedObject = entry.text
-                switch entry.kind {
-                case "task": row.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-                case "translate": row.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
-                case "prompt": row.image = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: nil)
-                case "edit": row.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
-                case "snippet": row.image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)
-                default: break
-                }
+                row.image = entry.kind.symbolName.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
                 sub.addItem(row)
             }
-        }
-        root.submenu = sub
-        return root
-    }
-
-    private func engineMenuItem() -> NSMenuItem {
-        let current = config.usesLocalEngine ? "Parakeet v3 (on this Mac)" : "Whisper via Groq (cloud)"
-        let root = NSMenuItem(title: "Engine: \(current)", action: nil, keyEquivalent: "")
-        let sub = submenu()
-        for (title, engine) in [("Parakeet v3 — on this Mac, no account needed", "parakeet"),
-                                ("Whisper via Groq — cloud, needs an API key", "groq")] {
-            let row = item(title, #selector(menuSetEngine(_:)))
-            row.representedObject = engine
-            row.state = config.sttEngine == engine ? .on : .off
-            sub.addItem(row)
-        }
-        if let text = localModelStatus {
-            sub.addItem(.separator())
-            sub.addItem(status("Parakeet model: \(text)"))
-        }
-        root.submenu = sub
-        return root
-    }
-
-    private func hotkeyMenuItem() -> NSMenuItem {
-        let root = NSMenuItem(title: "Hotkey: \(config.hotkeyKey.title)", action: nil, keyEquivalent: "")
-        let sub = submenu()
-        for key in HotkeyKey.allCases {
-            let row = item(key.title, #selector(menuSetHotkey(_:)))
-            row.representedObject = key.rawValue
-            row.state = config.hotkeyKey == key ? .on : .off
-            if let action = config.action(for: key) {
-                row.isEnabled = false
-                row.title = "\(key.title) — \(action.summary)"
-            }
-            sub.addItem(row)
         }
         root.submenu = sub
         return root
@@ -142,23 +93,6 @@ extension AppController: NSMenuDelegate {
         return root
     }
 
-    private func languageMenuItem() -> NSMenuItem {
-        let currentTitle = Config.recognitionLanguages.first { $0.code == config.language }?.name ?? config.language
-        let root = NSMenuItem(title: "Language: \(currentTitle)", action: nil, keyEquivalent: "")
-        let sub = submenu()
-        sub.addItem(status(config.usesLocalEngine
-                               ? "Parakeet: Auto keeps mixed RU/EN; a fixed language only filters the alphabet"
-                               : "Whisper: Auto detects per phrase; a fixed language forces it"))
-        for (code, name) in Config.recognitionLanguages {
-            let row = item(name, #selector(menuSetLanguage(_:)))
-            row.representedObject = code
-            row.state = config.language == code ? .on : .off
-            sub.addItem(row)
-        }
-        root.submenu = sub
-        return root
-    }
-
     // MARK: - Item helpers
 
     private func submenu() -> NSMenu {
@@ -174,12 +108,6 @@ extension AppController: NSMenuDelegate {
         return it
     }
 
-    private func check(_ title: String, _ action: Selector, _ on: Bool) -> NSMenuItem {
-        let it = item(title, action)
-        it.state = on ? .on : .off
-        return it
-    }
-
     /// Greyed-out informational row.
     private func status(_ title: String) -> NSMenuItem {
         let it = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -189,51 +117,11 @@ extension AppController: NSMenuDelegate {
 
     // MARK: - Actions
 
-    @objc func menuSetEngine(_ sender: NSMenuItem) {
-        guard let engine = sender.representedObject as? String else { return }
-        config.sttEngine = engine
-        settingsChanged()
-        Log.write("engine → \(engine)")
-        if !config.usesLocalEngine && config.groqApiKey.isEmpty {
-            menuShowSettings()
-            settingsWindow.selectTab(2)
-        }
-    }
-
-    @objc func menuSetHotkey(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let key = HotkeyKey(rawValue: raw) else { return }
-        if case .recording = phase { recorder.discard(); phase = .idle; setIcon(.ready) }
-        config.hotkey = key.rawValue
-        settingsChanged()
-        Log.write("hotkey → \(key.rawValue)")
-        if let caveat = key.caveat {
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "\(key.title) is now the push-to-talk key"
-            alert.informativeText = caveat
-            alert.runModal()
-        }
-    }
-
     @objc func menuSetMicrophone(_ sender: NSMenuItem) {
         guard let uid = sender.representedObject as? String else { return }
         config.inputDeviceUID = uid
         settingsChanged()
         Log.write("microphone → \(uid.isEmpty ? "system default" : sender.title)")
-    }
-
-    @objc func menuSetLanguage(_ sender: NSMenuItem) {
-        guard let code = sender.representedObject as? String else { return }
-        config.language = code
-        settingsChanged()
-        Log.write("language → \(code.isEmpty ? "auto" : code)")
-    }
-
-    @objc func menuToggleSounds() {
-        config.playFeedbackSounds.toggle()
-        settingsChanged()
-        Log.write("sound feedback → \(config.playFeedbackSounds)")
-        if config.playFeedbackSounds { NSSound(named: "Pop")?.play() }
     }
 
     @objc func menuCopyRecent(_ sender: NSMenuItem) {

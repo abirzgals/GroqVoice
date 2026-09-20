@@ -1,6 +1,6 @@
 import Cocoa
 
-enum PasteMode: String, CaseIterable {
+enum PasteMode: String, Codable {
     case paste  // clipboard + ⌘V (fast, default)
     case type   // synthesized keystrokes, for apps where ⌘V doesn't paste
 }
@@ -46,11 +46,7 @@ enum Paster {
             Log.write("paste: failed to create CGEvent")
             return
         }
-        down.flags = .maskCommand
-        up.flags = .maskCommand
-        mark(down); mark(up)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        postCommandKey(down: down, up: up)
 
         guard restoreClipboard, !snapshot.isEmpty else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) {
@@ -86,8 +82,16 @@ enum Paster {
         let kVK_C: CGKeyCode = 8
         guard let down = CGEvent(keyboardEventSource: src, virtualKey: kVK_C, keyDown: true),
               let up = CGEvent(keyboardEventSource: src, virtualKey: kVK_C, keyDown: false) else { return }
+        postCommandKey(down: down, up: up)
+    }
+
+    /// ⌘ rides on the key-down only. A key-up that still carries the flag
+    /// leaves ⌘ "held" in the system's modifier state for some 300 ms, and
+    /// `waitForModifierRelease` then sat out its whole timeout before every
+    /// paste that followed a ⌘C selection probe.
+    private static func postCommandKey(down: CGEvent, up: CGEvent) {
         down.flags = .maskCommand
-        up.flags = .maskCommand
+        up.flags = []
         mark(down); mark(up)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)

@@ -33,21 +33,6 @@ final class LocalSTT {
     private var unloadTimer: Timer?
     private var unloadAfterSeconds: TimeInterval  // 0 = keep warm forever
 
-    // Vocabulary boosting: a second, small CTC model (Parakeet CTC 110M, ~106 MB,
-    // English token set) spots the user's terms acoustically and a rescorer
-    // swaps the mangled words in the transcript for them. Built lazily from
-    // vocabulary.txt and rebuilt when the file changes.
-    private var boosting: VocabularyBoostingSession?
-    private var boostingFileMtime: Date?
-    private var boostingTask: Task<VocabularyBoostingSession?, Never>?
-    private var boostingRetryAfter = Date.distantPast
-    private(set) var boostingTermCount = 0
-
-    static var ctcModelsDir: URL { CtcModels.defaultCacheDirectory(for: .ctc110m) }
-    static let approximateCtcDownloadMB = 106
-    var isCtcModelDownloaded: Bool { CtcModels.modelsExist(at: LocalSTT.ctcModelsDir) }
-    var isBoostingReady: Bool { boosting != nil }
-
     init(unloadAfterMinutes: Double) {
         unloadAfterSeconds = unloadAfterMinutes <= 0 ? 0 : max(60, unloadAfterMinutes * 60)
     }
@@ -66,7 +51,6 @@ final class LocalSTT {
     }
 
     var isLoaded: Bool { manager != nil }
-    var isBusyLoading: Bool { loadTask != nil }
 
     private func emit(_ stage: Stage) {
         DispatchQueue.main.async { [weak self] in self?.onStage?(stage) }
@@ -129,22 +113,15 @@ final class LocalSTT {
         }
     }
 
-    /// Kicks off download + load without waiting for it (first run, or the
-    /// first dictation served by the cloud while the model arrives). Also
-    /// prepares vocabulary boosting so the first take pays no extra latency.
-    func warmUpInBackground(vocabularyFile: URL? = nil) {
-        guard manager == nil || (vocabularyFile != nil && boosting == nil) else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            guard (try? await self.ensureLoaded()) != nil else { return }
-            if let vocabularyFile { _ = await self.boostingSession(for: vocabularyFile) }
-        }
+    /// Kicks off download + load without waiting for it (launch, first run, or
+    /// the first dictation served by the cloud while the model arrives).
+    func warmUpInBackground() {
+        guard manager == nil else { return }
+        Task { [weak self] in _ = try? await self?.ensureLoaded() }
     }
 
-    /// `pcm16` is raw 16 kHz mono little-endian Int16 — exactly what Recorder
-    /// produces. When `vocabularyFile` has terms, the transcript is rescored
-    /// against them.
-    func transcribe(pcm16: Data, language: String, vocabularyFile: URL? = nil) async throws -> String {
+    /// `pcm16` is raw 16 kHz mono little-endian Int16 — exactly what Recorder produces.
+    func transcribe(pcm16: Data, language: String) async throws -> String {
         let manager = try await ensureLoaded()
         emit(.transcribing)
 
@@ -159,71 +136,8 @@ final class LocalSTT {
                          Double(samples.count) / Recorder.sampleRate,
                          Date().timeIntervalSince(started), result.confidence))
 
-        var text = result.text
-        if let vocabularyFile,
-           let session = await boostingSession(for: vocabularyFile),
-           let timings = result.tokenTimings, !timings.isEmpty {
-            let t0 = Date()
-            if let out = await session.rescore(text: result.text, tokenTimings: timings, audioSamples: samples),
-               out.wasModified {
-                let applied = out.replacements.filter(\.shouldReplace)
-                    .map { "\($0.originalWord) → \($0.replacementWord ?? "?")" }
-                Log.write(String(format: "vocabulary: %@ (%.2fs)", applied.joined(separator: ", "), Date().timeIntervalSince(t0)))
-                text = out.text
-            } else {
-                Log.write(String(format: "vocabulary: no replacements (%.2fs)", Date().timeIntervalSince(t0)))
-            }
-        }
-
         scheduleUnload()
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Boosting session for the current vocabulary file: cached by mtime,
-    /// nil when the file has no usable terms. The CTC model is downloaded on
-    /// first use only if there are terms to look for.
-    private func boostingSession(for file: URL) async -> VocabularyBoostingSession? {
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date) ?? nil
-        if mtime == boostingFileMtime, Date() >= boostingRetryAfter || boosting != nil {
-            return boosting
-        }
-        if let boostingTask { return await boostingTask.value }
-
-        let task = Task<VocabularyBoostingSession?, Never> { [weak self] in
-            do {
-                let plain = try CustomVocabularyContext.loadFromSimpleFormat(from: file)
-                guard !plain.terms.isEmpty else {
-                    Log.write("vocabulary: no terms — boosting off")
-                    return nil
-                }
-                if !(self?.isCtcModelDownloaded ?? true) {
-                    Log.write("vocabulary: downloading Parakeet CTC 110M (~\(LocalSTT.approximateCtcDownloadMB) MB) for term spotting…")
-                }
-                self?.emit(.loadingModel)
-                let started = Date()
-                let (vocab, models) = try await CustomVocabularyContext.loadWithCtcTokens(from: file.path)
-                // The CTC helper is an English model. Its acoustic-only "rescue"
-                // pass fires on random Russian words, so only allow replacements
-                // that also look like the term (or one of its aliases) in text.
-                let session = try await VocabularyBoostingSession(
-                    vocabulary: vocab, ctcModels: models,
-                    config: VocabularyRescorer.Config(spotterRescueEnabled: false))
-                Log.write(String(format: "vocabulary: boosting ready — %d terms in %.1fs", vocab.terms.count, Date().timeIntervalSince(started)))
-                return session
-            } catch {
-                Log.write("vocabulary: boosting unavailable — \(error.localizedDescription)")
-                return nil
-            }
-        }
-        boostingTask = task
-        let session = await task.value
-        boostingTask = nil
-        boosting = session
-        boostingFileMtime = mtime
-        boostingTermCount = session?.vocabulary.terms.count ?? 0
-        boostingRetryAfter = session == nil ? Date().addingTimeInterval(300) : .distantPast
-        emit(.ready)
-        return session
+        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func floats(from pcm16: Data) -> [Float] {

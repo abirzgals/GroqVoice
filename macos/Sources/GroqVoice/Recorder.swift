@@ -3,15 +3,22 @@ import CoreAudio
 import Foundation
 
 /// Captures the chosen input device (or the system default) with AVAudioEngine,
-/// resamples to 16 kHz mono 16-bit PCM in memory. The finished take is also written to
-/// last.wav for debugging and for the local Whisper path.
+/// resamples to 16 kHz mono 16-bit PCM in memory.
 final class Recorder {
     struct Result {
         let duration: TimeInterval
         let peakPercent: Double
         let pcm: Data   // raw 16 kHz mono Int16 samples
-        let wav: Data   // the same audio as a complete WAV file
-        let deviceName: String
+
+        /// The same audio as a complete WAV file — built on demand: only the
+        /// cloud engine and the last.wav debug copy need it.
+        var wav: Data { Recorder.wav(pcm16: pcm) }
+
+        /// Keeps a copy as last.wav, off the take's critical path.
+        func saveForDebugging() {
+            let pcm = pcm
+            DispatchQueue.global(qos: .utility).async { try? Recorder.wav(pcm16: pcm).write(to: Recorder.wavURL) }
+        }
     }
 
     struct RecorderError: LocalizedError {
@@ -183,8 +190,10 @@ final class Recorder {
     func stop() -> Result? {
         guard let engine, let t0 = startedAt else { return nil }
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
         teardown()
+        // Shutting the hardware down takes some 60 ms the transcript shouldn't
+        // wait for; the samples are complete once the tap is gone.
+        DispatchQueue.global(qos: .userInitiated).async { engine.stop() }
 
         lock.lock()
         let samples = pcm
@@ -197,13 +206,7 @@ final class Recorder {
         // shouldn't count towards the "too short" filter.
         let duration = Double(samples.count / 2) / Recorder.sampleRate
         Log.write(String(format: "mic: %@ — %.2fs captured over %.2fs wall", deviceName, duration, Date().timeIntervalSince(t0)))
-        let wav = Recorder.wav(pcm16: samples)
-        try? wav.write(to: Recorder.wavURL)
-        return Result(duration: duration,
-                      peakPercent: Double(pk) / 32768.0 * 100.0,
-                      pcm: samples,
-                      wav: wav,
-                      deviceName: deviceName)
+        return Result(duration: duration, peakPercent: Double(pk) / 32768.0 * 100.0, pcm: samples)
     }
 
     func discard() {

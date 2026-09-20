@@ -37,10 +37,9 @@ if CommandLine.arguments.contains("--download-model") {
     exit(0)
 }
 
-// GroqVoice --transcribe <file.wav> [--vocab <terms.txt>] [--boost]
+// GroqVoice --transcribe <file.wav> [--vocab <terms.txt>]
 //   transcribe a 16 kHz mono 16-bit WAV with the on-device engine; --vocab applies
-//   the alias replacement from that file, --boost additionally runs the acoustic
-//   CTC term spotter (downloads the helper model on first use)
+//   the alias replacement from that file
 if let flag = CommandLine.arguments.firstIndex(of: "--transcribe"), CommandLine.arguments.count > flag + 1 {
     let path = CommandLine.arguments[flag + 1]
     var vocabFile: URL?
@@ -55,8 +54,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--transcribe"), CommandLine.
             let wav = try Data(contentsOf: URL(fileURLWithPath: path))
             guard let range = Recorder.dataChunkRange(in: wav) else { throw AppError("not a WAV file") }
             let t0 = Date()
-            let boost = CommandLine.arguments.contains("--boost")
-            let text = try await stt.transcribe(pcm16: wav.subdata(in: range), language: cfg.language, vocabularyFile: boost ? vocabFile : nil)
+            let text = try await stt.transcribe(pcm16: wav.subdata(in: range), language: cfg.language)
             print(String(format: "[%.2fs incl. model load] %@", Date().timeIntervalSince(t0), text))
             if let vocabFile {
                 let aliased = Vocabulary(fileURL: vocabFile).applyAliases(to: text)
@@ -70,6 +68,16 @@ if let flag = CommandLine.arguments.firstIndex(of: "--transcribe"), CommandLine.
     while sem.wait(timeout: .now()) == .timedOut {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
+    exit(0)
+}
+
+// GroqVoice --probe-ax <bundle id> [--manual]
+//   what a running app tells Accessibility about its focused element; --manual asks an
+//   Electron app for its tree first. Needs the app's own Accessibility grant, so run it as
+//   open -n -W -o out.txt GroqVoice.app --args --probe-ax com.anthropic.claudefordesktop --manual
+if let flag = CommandLine.arguments.firstIndex(of: "--probe-ax"), CommandLine.arguments.count > flag + 1 {
+    print(FocusedText.debugProbe(bundleID: CommandLine.arguments[flag + 1],
+                                 manual: CommandLine.arguments.contains("--manual")))
     exit(0)
 }
 

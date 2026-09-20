@@ -3,50 +3,58 @@ import Testing
 @testable import GroqVoice
 
 @Suite struct ConfigTests {
-    @Test func decodesLegacyKeysAndFillsMissingOnes() throws {
+    @Test func fillsMissingKeysWithDefaults() throws {
         let json = """
-        {"groqApiKey":"k","transcriptionModel":"whisper-large-v3-turbo","chatModel":"llama-3.1-8b-instant",
-         "localMode":"off","pttHoldMs":300}
+        {"groqApiKey":"k","pttHoldMs":300,"sttEngine":"groq","hotkey":"rightCommand","someKeyFromTheFuture":1}
         """
-        let cfg = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
+        let cfg = try #require(Config.decode(from: Data(json.utf8)))
         #expect(cfg.groqApiKey == "k")
-        #expect(cfg.transcriptionModels.first == "whisper-large-v3-turbo")
-        #expect(cfg.chatModels.first == "llama-3.1-8b-instant")
-        #expect(cfg.sttEngine == "groq")      // legacy "off" meant cloud only
         #expect(cfg.pttHoldMs == 300)
-        #expect(cfg.hotkey == "fn")            // default filled in
-        #expect(cfg.releaseTailMs == 150)
+        #expect(cfg.sttEngine == .groq)
+        #expect(cfg.hotkey == .rightCommand)
+        #expect(cfg.releaseTailMs == 150)       // default filled in
+        #expect(cfg.chatModels == Config().chatModels)
     }
 
-    @Test func migratesRetiredGroqModelList() throws {
+    @Test func anInvalidValueCostsOnlyThatKey() throws {
         let json = """
-        {"chatModels":["llama-3.3-70b-versatile","openai/gpt-oss-120b","llama-3.1-8b-instant"]}
+        {"hotkey":"capsLock","pasteMode":"type","historySize":"many","minRecordingSeconds":0.5,
+         "keyActions":[{"key":"leftControl","kind":"translate"}]}
         """
-        let cfg = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
-        // Decoding keeps what the file says; Config.load() swaps the retired default.
-        #expect(Config.legacyChatModelLists.contains(cfg.chatModels))
-        #expect(Config().chatModels.first == "qwen/qwen3.8-27b")
+        let cfg = try #require(Config.decode(from: Data(json.utf8)))
+        #expect(cfg.hotkey == .fn)               // "capsLock" is not a key we know
+        #expect(cfg.historySize == 50)           // wrong type
+        #expect(cfg.pasteMode == .type)          // the rest survives
+        #expect(cfg.minRecordingSeconds == 0.5)
+        #expect(cfg.keyActions == [KeyAction(key: .leftControl, kind: .translate, language: "en")])
+    }
+
+    @Test func rejectsWhatIsNotJSON() {
+        #expect(Config.decode(from: Data("groqApiKey = k".utf8)) == nil)
+    }
+
+    @Test func roundTrips() throws {
+        var cfg = Config()
+        cfg.hotkey = .rightOption
+        cfg.keyActions = [KeyAction(key: .leftOption, kind: .prompt, prompt: "Сделай формально")]
+        cfg.minRecordingSeconds = 0.3
+        let data = try JSONEncoder().encode(cfg)
+        let back = try #require(Config.decode(from: data))
+        #expect(back.hotkey == .rightOption)
+        #expect(back.keyActions == cfg.keyActions)
+        #expect(back.minRecordingSeconds == 0.3)
     }
 
     @Test func keyActionsIgnoreTheMainKey() {
         var cfg = Config()
-        cfg.hotkey = "rightCommand"
-        cfg.setAction(KeyAction(key: "rightCommand", kind: "translate", language: "lv"), for: .rightCommand)
+        cfg.hotkey = .rightCommand
+        cfg.setAction(KeyAction(key: .rightCommand, kind: .translate, language: "lv"), for: .rightCommand)
         #expect(cfg.action(for: .rightCommand) == nil)
         #expect(cfg.activeKeyActions.isEmpty)
-        cfg.setAction(KeyAction(key: "rightOption", kind: "prompt", prompt: "Сделай формально"), for: .rightOption)
+        cfg.setAction(KeyAction(key: .rightOption, kind: .prompt, prompt: "Сделай формально"), for: .rightOption)
         #expect(cfg.action(for: .rightOption)?.summary == "Сделай формально")
         cfg.setAction(nil, for: .rightOption)
         #expect(cfg.action(for: .rightOption) == nil)
-    }
-
-    @Test func migratesTheOldTranslateKey() throws {
-        let json = """
-        {"translateHotkey":"leftControl","translateLanguage":"lv"}
-        """
-        let cfg = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
-        #expect(cfg.keyActions == [KeyAction(key: "leftControl", kind: "translate", language: "lv")])
-        #expect(cfg.action(for: .leftControl)?.summary == "translate into Latvian")
     }
 
     @Test func chatEndpointHelpers() {

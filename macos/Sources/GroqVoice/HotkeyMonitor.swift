@@ -2,7 +2,7 @@ import Cocoa
 
 /// Keys that can serve as push-to-talk triggers. All are modifiers, so
 /// holding one never types anything and the rest of the keyboard keeps working.
-enum HotkeyKey: String, CaseIterable {
+enum HotkeyKey: String, Codable, CaseIterable {
     case fn, rightCommand, rightOption, rightControl, leftControl, leftOption, leftCommand
 
     var title: String {
@@ -66,7 +66,6 @@ final class HotkeyMonitor {
     var onKeyUp: ((HotkeyKey) -> Void)?
     var onChordKey: (() -> Void)?      // another key pressed while a hotkey is held
     var onEscape: (() -> Void)?        // Esc on its own (cancels a locked recording)
-    var onScreenToggle: (() -> Void)?  // ⌃⌥⌘R — start/stop screen recording
 
     /// Stamped on every event the app posts itself (⌘V, ⌘C, typed text) so the
     /// tap doesn't mistake them for the user chording with a held hotkey.
@@ -165,15 +164,8 @@ final class HotkeyMonitor {
                 }
             }
         case .keyDown:
-            // ⌃⌥⌘R (R = 0x0F) toggles screen recording — an uncommon combo,
-            // checked independently of the hotkeys.
-            let mods: CGEventFlags = [.maskControl, .maskAlternate, .maskCommand]
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-            if keycode == 0x0F,
-               event.flags.contains(mods),
-               !event.flags.contains(.maskShift) {
-                DispatchQueue.main.async { self.onScreenToggle?() }
-            } else if !down.isEmpty {
+            if !down.isEmpty {
                 DispatchQueue.main.async { self.onChordKey?() }
             } else if keycode == 53, event.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty {
                 DispatchQueue.main.async { self.onEscape?() }

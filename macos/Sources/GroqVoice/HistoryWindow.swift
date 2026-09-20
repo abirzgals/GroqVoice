@@ -8,6 +8,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
     private let search = NSSearchField()
     private let table = NSTableView()
     private let countLabel = NSTextField(labelWithString: "")
+    private lazy var copyOriginal = NSButton(title: "Copy Original", target: self, action: #selector(copyOriginalOfSelected))
     private var rows: [HistoryEntry] = []
     private let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -88,7 +89,9 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         countLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let bottom = NSStackView(views: [countLabel, spacer, fix, clear, copy, paste])
+        copyOriginal.toolTip = "What you said or had selected before the language model rewrote it"
+        copyOriginal.isEnabled = false
+        let bottom = NSStackView(views: [countLabel, spacer, fix, clear, copyOriginal, copy, paste])
         bottom.orientation = .horizontal
         bottom.spacing = 8
 
@@ -110,8 +113,11 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
 
     private func reload() {
         let query = search.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
-        rows = app.history.entries.reversed().filter { query.isEmpty || $0.text.lowercased().contains(query) }
+        rows = app.history.entries.reversed().filter {
+            query.isEmpty || $0.text.lowercased().contains(query) || ($0.source?.lowercased().contains(query) ?? false)
+        }
         table.reloadData()
+        copyOriginal.isEnabled = selectedEntry?.source != nil
         countLabel.stringValue = query.isEmpty
             ? "\(rows.count) entries"
             : "\(rows.count) of \(app.history.entries.count) match"
@@ -147,8 +153,9 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
                 ])
                 return c
             }()
-            let symbol: String? = ["task": "sparkles", "translate": "globe", "edit": "pencil", "snippet": "text.badge.plus"][entry.kind]
-            cell.imageView?.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: entry.kind) }
+            cell.imageView?.image = entry.kind.symbolName.flatMap {
+                NSImage(systemSymbolName: $0, accessibilityDescription: entry.kind.rawValue)
+            }
             cell.imageView?.contentTintColor = .secondaryLabelColor
             return cell
         }
@@ -174,7 +181,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         } else {
             cell.textField?.stringValue = entry.menuTitle.isEmpty ? entry.text : entry.text.replacingOccurrences(of: "\n", with: " ⏎ ")
             cell.textField?.textColor = .labelColor
-            cell.toolTip = entry.text
+            cell.toolTip = entry.source.map { "\(entry.text)\n\nOriginal:\n\($0)" } ?? entry.text
         }
         return cell
     }
@@ -184,13 +191,26 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         return row >= 0 && row < rows.count ? rows[row] : nil
     }
 
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        copyOriginal.isEnabled = selectedEntry?.source != nil
+    }
+
     // MARK: - Actions
 
     @objc private func copySelected() {
         guard let entry = selectedEntry else { return }
+        copyToClipboard(entry.text)
+    }
+
+    @objc private func copyOriginalOfSelected() {
+        guard let source = selectedEntry?.source else { return }
+        copyToClipboard(source)
+    }
+
+    private func copyToClipboard(_ text: String) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(entry.text, forType: .string)
+        pb.setString(text, forType: .string)
         app.flashIcon(.copied, for: 1.2)
     }
 
@@ -201,7 +221,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         window?.orderOut(nil)
         NSApp.hide(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            Paster.deliver(entry.text, mode: cfg.pasteModeValue, restoreClipboard: cfg.restoreClipboard)
+            Paster.deliver(entry.text, mode: cfg.pasteMode, restoreClipboard: cfg.restoreClipboard)
             Log.write("pasted from history (\(entry.text.count) chars)")
         }
     }

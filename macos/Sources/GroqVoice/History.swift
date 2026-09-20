@@ -1,9 +1,34 @@
 import Foundation
 
 struct HistoryEntry: Codable {
+    enum Kind: String, Codable {
+        case dictation, snippet, edit, translate, prompt, task
+
+        /// SF Symbol shown next to the entry; plain dictation has none.
+        var symbolName: String? {
+            switch self {
+            case .dictation: return nil
+            case .snippet: return "text.badge.plus"
+            case .edit: return "pencil"
+            case .translate: return "globe"
+            case .prompt: return "wand.and.stars"
+            case .task: return "sparkles"
+            }
+        }
+
+        // A kind written by some other version still loads.
+        init(from decoder: Decoder) throws {
+            self = Kind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .dictation
+        }
+    }
+
     let time: Date
-    let kind: String  // "dictation" | "task"
+    let kind: Kind
     let text: String
+    /// What went into the language model (the speech, or the selection it
+    /// replaced) when `text` is the model's answer — so a bad rewrite or
+    /// translation never costs the original.
+    var source: String?
 
     /// Single-line, shortened form for menus.
     var menuTitle: String {
@@ -25,7 +50,14 @@ final class History {
     }
     /// Called on the main thread after any change.
     var onChange: (() -> Void)?
-    private let limit: Int
+    var limit: Int {
+        didSet {
+            limit = max(1, limit)
+            guard entries.count > limit else { return }
+            entries.removeFirst(entries.count - limit)
+            save()
+        }
+    }
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -38,10 +70,12 @@ final class History {
 
     var latest: HistoryEntry? { entries.last }
 
-    func add(_ text: String, kind: String) {
+    func add(_ text: String, kind: HistoryEntry.Kind, source: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        entries.append(HistoryEntry(time: Date(), kind: kind, text: trimmed))
+        let original = source?.trimmingCharacters(in: .whitespacesAndNewlines)
+        entries.append(HistoryEntry(time: Date(), kind: kind, text: trimmed,
+                                    source: original == trimmed || original?.isEmpty == true ? nil : original))
         if entries.count > limit { entries.removeFirst(entries.count - limit) }
         save()
     }

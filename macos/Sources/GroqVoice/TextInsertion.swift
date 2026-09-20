@@ -13,32 +13,44 @@ struct FocusedText {
     var lastVisibleBefore: Character? { before.flatMap { $0.isWhitespace ? nil : $0 } }
 
     static func current() -> FocusedText? {
-        guard let element = focusedElement() else { return nil }
+        guard let element = focusedElement(), PasteTarget.editableRoles.contains(role(of: element)) else { return nil }
 
-        var roleRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
-              let role = roleRef as? String,
-              [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, "AXSearchField"].contains(role) else { return nil }
-
-        var valueRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
-              let text = valueRef as? String else { return nil }
         var rangeRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
               let rangeAny = rangeRef else { return nil }
         var range = CFRange()
-        guard AXValueGetValue(rangeAny as! AXValue, .cfRange, &range) else { return nil }
+        guard AXValueGetValue(rangeAny as! AXValue, .cfRange, &range), range.location >= 0 else { return nil }
+        let end = range.location + range.length
 
+        // Ask for the two neighbouring characters only: a web text area's value
+        // is its whole text, and fetching that was most of a take's latency.
+        var countRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &countRef) == .success,
+           let count = countRef as? Int, end <= count,
+           let before = range.location > 0 ? string(of: element, at: range.location - 1) : "",
+           let after = end < count ? string(of: element, at: end) : "" {
+            return FocusedText(before: before.last, after: after.first, isEmpty: count == 0)
+        }
+
+        // Apps without the ranged read: take the whole value.
+        var valueRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
+              let text = valueRef as? String else { return nil }
         let ns = text as NSString
-        guard range.location >= 0, range.location <= ns.length else { return nil }
-        let before: Character? = range.location > 0
-            ? Character(ns.substring(with: NSRange(location: range.location - 1, length: 1)))
-            : nil
-        let afterIndex = range.location + range.length
-        let after: Character? = afterIndex < ns.length
-            ? Character(ns.substring(with: NSRange(location: afterIndex, length: 1)))
-            : nil
-        return FocusedText(before: before, after: after, isEmpty: ns.length == 0)
+        guard end <= ns.length else { return nil }
+        let before = range.location > 0 ? ns.substring(with: NSRange(location: range.location - 1, length: 1)) : ""
+        let after = end < ns.length ? ns.substring(with: NSRange(location: end, length: 1)) : ""
+        return FocusedText(before: before.last, after: after.first, isEmpty: ns.length == 0)
+    }
+
+    /// One UTF-16 unit of the element's text; nil when the app can't answer.
+    private static func string(of element: AXUIElement, at location: Int) -> String? {
+        var range = CFRange(location: location, length: 1)
+        guard let param = AXValueCreate(.cfRange, &range) else { return nil }
+        var out: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString,
+                                                         param, &out) == .success else { return nil }
+        return out as? String
     }
 
     /// What the focused app exposes about its selection, for the log.
@@ -66,21 +78,59 @@ struct FocusedText {
         return lineCopyingApps.contains { id.hasPrefix($0) }
     }
 
+    /// Editors built on VS Code. They expose no focused element, and must not
+    /// be asked to (see `requestAccessibilityTree`) — but their focus is
+    /// practically always an editor, a terminal or a chat box, so a paste lands.
+    private static let monacoApps = ["com.microsoft.vscode", "com.vscodium", "com.todesktop.230313mzl4w4u92",
+                                     "com.exafunction.windsurf"]
+    static func isMonacoApp(_ bundleID: String?) -> Bool {
+        guard let id = bundleID?.lowercased() else { return false }
+        return monacoApps.contains { id.hasPrefix($0) }
+    }
+
+    private static let systemWide: AXUIElement = {
+        let element = AXUIElementCreateSystemWide()
+        // Accessibility calls block until the target app answers; a busy app
+        // must not stall a take. On the system-wide element this is the
+        // process-wide default.
+        AXUIElementSetMessagingTimeout(element, 0.3)
+        return element
+    }()
+
     /// The element with keyboard focus: the system-wide attribute first, then
     /// the frontmost app's own (Electron apps answer only the latter, if at all).
     static func focusedElement() -> AXUIElement? {
         var ref: CFTypeRef?
-        if AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &ref) == .success,
+        if AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &ref) == .success,
            let r = ref {
             return (r as! AXUIElement)
         }
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
         ref = nil
-        if AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
-                                         kAXFocusedUIElementAttribute as CFString, &ref) == .success, let r = ref {
+        if AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &ref) == .success, let r = ref {
             return (r as! AXUIElement)
         }
+        requestAccessibilityTree(of: app, element: appElement)
         return nil
+    }
+
+    private static var treeRequested: Set<pid_t> = []
+
+    /// Electron apps (Claude, Slack, Discord…) build their accessibility tree
+    /// only when asked through `AXManualAccessibility`. Asked once per process;
+    /// the tree appears a moment later, so this take still sees nothing — it is
+    /// requested at key-down and is there by the time the key is released.
+    /// VS Code and its forks are left alone: for them the request means "a
+    /// screen reader is attached" and turns off word wrap and turns on audio cues.
+    private static func requestAccessibilityTree(of app: NSRunningApplication, element: AXUIElement) {
+        let pid = app.processIdentifier
+        guard !treeRequested.contains(pid), !isMonacoApp(app.bundleIdentifier) else { return }
+        treeRequested.insert(pid)
+        let status = AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        if status == .success {
+            Log.write("accessibility: asked \(app.localizedName ?? "?") to build its tree (AXManualAccessibility)")
+        }
     }
 
     static func role(of element: AXUIElement) -> String {
@@ -128,7 +178,66 @@ struct FocusedText {
         return viaCopy(role: role)
     }
 
-    static func selectedText() -> String? { probeSelection(allowCopy: true).text }
+    /// Debug (`--probe-ax <bundle id> [--manual]`): what a running app exposes
+    /// about its focused element, optionally after asking it for its tree.
+    static func debugProbe(bundleID: String, manual: Bool) -> String {
+        guard AXIsProcessTrusted() else { return "not trusted for Accessibility — launch through `open GroqVoice.app --args …`" }
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else {
+            return "\(bundleID) is not running"
+        }
+        _ = systemWide
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+
+        func describe() -> String? {
+            var ref: CFTypeRef?
+            let t0 = Date()
+            let status = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &ref)
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            guard status == .success, let r = ref else { return nil }
+            let element = r as! AXUIElement
+            var settable = DarwinBoolean(false)
+            AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+            var countRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &countRef)
+            var rangeRef: CFTypeRef?
+            var range = CFRange(location: -1, length: 0)
+            if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+               let v = rangeRef { AXValueGetValue(v as! AXValue, .cfRange, &range) }
+            let ranged = range.location > 0 ? string(of: element, at: range.location - 1) : nil
+            return "role \(role(of: element)), value settable \(settable.boolValue), characters \((countRef as? Int).map(String.init) ?? "n/a"), "
+                + "caret \(range.location)+\(range.length), ranged read \(ranged == nil ? "n/a" : "ok") (\(ms) ms)"
+        }
+
+        var lines = ["\(app.localizedName ?? bundleID): " + (describe() ?? "no focused element")]
+        if manual {
+            let status = AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            lines.append("AXManualAccessibility → \(status == .success ? "accepted" : "refused (\(status.rawValue))")")
+            let t0 = Date()
+            var found: String?
+            while found == nil, Date().timeIntervalSince(t0) < 3 {
+                Thread.sleep(forTimeInterval: 0.05)
+                found = describe()
+            }
+            lines.append(found.map { String(format: "after %.2fs: ", Date().timeIntervalSince(t0)) + $0 } ?? "still no focused element after 3s")
+        }
+        // An app in the background has no focus to report; its tree still shows
+        // whether text fields are exposed at all.
+        var nodes = 0
+        var textRoles: [String: Int] = [:]
+        func walk(_ element: AXUIElement, depth: Int) {
+            guard depth < 40, nodes < 5000 else { return }
+            nodes += 1
+            let r = role(of: element)
+            if PasteTarget.editableRoles.contains(r) { textRoles[r, default: 0] += 1 }
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &ref) == .success,
+                  let children = ref as? [AXUIElement] else { return }
+            for child in children { walk(child, depth: depth + 1) }
+        }
+        walk(appElement, depth: 0)
+        lines.append("tree: \(nodes) elements, text fields: \(textRoles.isEmpty ? "none" : textRoles.map { "\($0.key)×\($0.value)" }.joined(separator: ", "))")
+        return lines.joined(separator: "\n")
+    }
 
     /// Can the focused element take a paste?
     enum PasteTarget: Equatable {
@@ -157,7 +266,10 @@ struct FocusedText {
 
     /// Looks at the focused element right before pasting.
     static func pasteTarget() -> (target: PasteTarget, role: String) {
-        guard let element = focusedElement() else { return (.unknown, "no focused element") }
+        guard let element = focusedElement() else {
+            let knownEditor = isMonacoApp(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            return (knownEditor ? .editable : .unknown, "no focused element")
+        }
         let role = role(of: element)
         var settable = DarwinBoolean(false)
         AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
