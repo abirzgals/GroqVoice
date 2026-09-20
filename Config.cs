@@ -7,7 +7,11 @@ public sealed class Config
 {
     [JsonPropertyName("groqApiKey")] public string GroqApiKey { get; set; } = "";
     [JsonPropertyName("transcriptionModel")] public string TranscriptionModel { get; set; } = "whisper-large-v3";
-    [JsonPropertyName("chatModel")] public string ChatModel { get; set; } = "llama-3.3-70b-versatile";
+    // Checked against the live Groq API on 2026-09-20: the Llama 3.x models this
+    // app shipped with have been retired. Qwen goes first — on a one-sentence
+    // rewrite it answers in a fraction of the tokens the gpt-oss models spend on
+    // hidden reasoning, and the free tier meters tokens per minute.
+    [JsonPropertyName("chatModel")] public string ChatModel { get; set; } = "qwen/qwen3.8-27b";
 
     // Which engine transcribes: "groq" (Whisper in the cloud, the default this
     // app shipped with) or "parakeet" (NVIDIA Parakeet TDT v3 on this machine —
@@ -32,6 +36,16 @@ public sealed class Config
     // a task keyword counts only if it appears within the first N words of the transcript;
     // otherwise the utterance is treated as plain dictation. Default 4.
     [JsonPropertyName("taskKeywordMaxWordPosition")] public int TaskKeywordMaxWordPosition { get; set; } = 4;
+
+    // How many past results are kept in history.jsonl, so a paste that landed in
+    // the wrong window can be recovered from the tray. 0 disables history.
+    [JsonPropertyName("historySize")] public int HistorySize { get; set; } = 50;
+
+    // When text is selected in the focused app, treat the utterance as an
+    // instruction about it ("сделай короче", "переведи на английский") and replace
+    // the selection with the result. Costs one Ctrl+C probe per dictation and
+    // needs an LLM, so it is skipped entirely without a Groq key.
+    [JsonPropertyName("editSelection")] public bool EditSelection { get; set; } = true;
 
     [JsonPropertyName("autostart")] public bool Autostart { get; set; } = true;
     [JsonPropertyName("playFeedbackSounds")] public bool PlayFeedbackSounds { get; set; } = true;
@@ -127,10 +141,11 @@ public sealed class Config
 
         try
         {
-            var json = File.ReadAllText(Path);
+            var json = ReadWithRetry(Path);
             var cfg = JsonSerializer.Deserialize<Config>(json) ?? new Config();
             if (string.IsNullOrWhiteSpace(cfg.GroqApiKey))
                 cfg.GroqApiKey = Environment.GetEnvironmentVariable("GROQ_API_KEY") ?? "";
+            cfg.MigrateRetiredModels();
             return cfg;
         }
         catch (Exception ex)
@@ -140,10 +155,55 @@ public sealed class Config
         }
     }
 
+    /// <summary>
+    /// Points a config at a model that still exists. Groq retires models, and a
+    /// config written a few months ago silently fails every task and every edit —
+    /// the request is simply refused. Only ids known to be gone are touched.
+    /// </summary>
+    private void MigrateRetiredModels()
+    {
+        if (ChatModel.StartsWith("llama-3.", StringComparison.OrdinalIgnoreCase) ||
+            ChatModel.StartsWith("llama3", StringComparison.OrdinalIgnoreCase) ||
+            ChatModel.StartsWith("mixtral", StringComparison.OrdinalIgnoreCase))
+        {
+            var old = ChatModel;
+            ChatModel = new Config().ChatModel;
+            Log.Warn($"chatModel \"{old}\" is retired on Groq — using \"{ChatModel}\". " +
+                     "Change it in Settings if you prefer another.");
+            Save();
+        }
+    }
+
     public void Save()
     {
         Directory.CreateDirectory(Dir);
         var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(Path, json);
+        WriteWithRetry(Path, json);
+    }
+
+    // Another instance (a --transcribe run, a second startup) can hold the file for
+    // the microseconds it takes to read or write it. Retrying costs nothing and keeps
+    // a collision from being read as "the config is broken" — which would hand the
+    // app an empty API key and then save the defaults over a good file.
+    private const int FileAttempts = 5;
+    private const int FileRetryMs = 60;
+
+    private static string ReadWithRetry(string path)
+    {
+        for (int i = 1; ; i++)
+        {
+            try { return File.ReadAllText(path); }
+            catch (IOException) when (i < FileAttempts) { Thread.Sleep(FileRetryMs); }
+        }
+    }
+
+    private static void WriteWithRetry(string path, string text)
+    {
+        for (int i = 1; ; i++)
+        {
+            try { File.WriteAllText(path, text); return; }
+            catch (IOException) when (i < FileAttempts) { Thread.Sleep(FileRetryMs); }
+            catch (IOException ex) { Log.Warn($"could not save config: {ex.Message}"); return; }
+        }
     }
 }

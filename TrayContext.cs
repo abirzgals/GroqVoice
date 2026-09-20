@@ -13,6 +13,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly Recorder _rec = new();
     private readonly Groq _groq;
     private readonly LocalStt _local = new();
+    private readonly History _history;
     private readonly NotifyIcon _tray;
     private readonly SynchronizationContext _ui;
 
@@ -29,6 +30,9 @@ public sealed class TrayContext : ApplicationContext
     private ToolStripMenuItem? _headerItem;
     private ToolStripMenuItem? _assignVoiceItem;
     private ToolStripMenuItem? _assignShotItem;
+    private ToolStripMenuItem? _recentItem;
+    private HistoryForm? _historyForm;
+    private SettingsForm? _settingsForm;
     private ToolStripMenuItem? _engineGroqItem;
     private ToolStripMenuItem? _engineLocalItem;
     private ToolStripMenuItem? _modelItem;
@@ -37,6 +41,7 @@ public sealed class TrayContext : ApplicationContext
     {
         _cfg = cfg;
         _groq = new Groq(cfg);
+        _history = new History(cfg.HistorySize);
         _ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
 
         _idleIcon = MakeDotIcon(Color.FromArgb(80, 200, 120));     // green
@@ -121,6 +126,24 @@ public sealed class TrayContext : ApplicationContext
         });
         engine.DropDownOpening += (_, _) => RefreshEngineLabels();
         m.Items.Add(engine);
+
+        _recentItem = new ToolStripMenuItem("Recent");
+        _recentItem.DropDownOpening += (_, _) => FillRecent();
+        m.Items.Add(_recentItem);
+
+        var pasteLast = new ToolStripMenuItem("Paste last again");
+        pasteLast.Click += (_, _) => PasteEntry(_history.Latest);
+        m.Items.Add(pasteLast);
+
+        var history = new ToolStripMenuItem("History…");
+        history.Click += (_, _) => ShowHistory();
+        m.Items.Add(history);
+
+        m.Items.Add(new ToolStripSeparator());
+
+        var settings = new ToolStripMenuItem("Settings…");
+        settings.Click += (_, _) => ShowSettings();
+        m.Items.Add(settings);
 
         var setup = new ToolStripMenuItem("Setup / change API key…");
         setup.Click += (_, _) =>
@@ -290,6 +313,86 @@ public sealed class TrayContext : ApplicationContext
 
     // NotifyIcon.Text throws above 63 characters.
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
+
+    /// <summary>The last few results, so the usual case never needs the window.</summary>
+    private void FillRecent()
+    {
+        if (_recentItem == null) return;
+        _recentItem.DropDownItems.Clear();
+
+        var recent = _history.Entries.Reverse().Take(10).ToArray();
+        if (recent.Length == 0)
+        {
+            _recentItem.DropDownItems.Add(new ToolStripMenuItem("(nothing yet)") { Enabled = false });
+            return;
+        }
+        foreach (var entry in recent)
+        {
+            var item = new ToolStripMenuItem($"{entry.Time:HH:mm}  {entry.OneLine(55)}");
+            item.Click += (_, _) => PasteEntry(entry);
+            _recentItem.DropDownItems.Add(item);
+        }
+    }
+
+    /// <summary>
+    /// Pastes a past result into whatever is focused now. The menu belongs to the
+    /// tray, which does not take the foreground, so no window has to be restored.
+    /// </summary>
+    private void PasteEntry(HistoryEntry? entry)
+    {
+        if (entry == null) { ShowBalloon("GroqVoice", "Nothing dictated yet.", ToolTipIcon.Info); return; }
+        Paster.Paste(entry.Text, restoreClipboard: _cfg.RestoreClipboardAfterPaste, options: BuildPasteOptions());
+    }
+
+    private void ShowHistory()
+    {
+        if (_historyForm is { IsDisposed: false })
+        {
+            _historyForm.RememberForegroundWindow(ForegroundApp.Current());
+            _historyForm.Activate();
+            return;
+        }
+        _historyForm = new HistoryForm(_history, BuildPasteOptions, _cfg.RestoreClipboardAfterPaste);
+        _historyForm.RememberForegroundWindow(ForegroundApp.Current());
+        _historyForm.FormClosed += (_, _) => _historyForm = null;
+        _historyForm.Show();
+    }
+
+    private void ShowSettings()
+    {
+        if (_settingsForm is { IsDisposed: false }) { _settingsForm.Activate(); return; }
+
+        _settingsForm = new SettingsForm(_cfg);
+        _settingsForm.Changed += ApplySettings;
+        _settingsForm.ModelRequested += () =>
+        {
+            ModelMenuClicked();
+            _settingsForm?.RefreshModelStatus();
+        };
+        _settingsForm.FormClosed += (_, _) => _settingsForm = null;
+        _settingsForm.Show();
+    }
+
+    /// <summary>
+    /// Re-applies the config to everything holding runtime state. Called after any
+    /// edit in the settings window, so a change is live without a restart.
+    /// </summary>
+    private void ApplySettings()
+    {
+        _hotkey.PttHoldMs = Math.Max(50, _cfg.PttHoldMs);
+        _hotkey.DoubleTapWindowMs = Math.Max(150, _cfg.DoubleTapWindowMs);
+        _history.Limit = _cfg.HistorySize;
+        _local.SetUnloadAfterMinutes(_cfg.LocalUnloadAfterMinutes);
+        if (_cfg.UsesLocalEngine) _local.WarmUpInBackground(); else _local.Unload();
+        RefreshEngineLabels();
+        RefreshHotkeyLabels();
+    }
+
+    /// <summary>
+    /// Editing a selection needs a language model to decide what was asked, so
+    /// without a Groq key the Ctrl+C probe would cost a keystroke for nothing.
+    /// </summary>
+    private bool CanEditSelection => _cfg.EditSelection && !string.IsNullOrWhiteSpace(_cfg.GroqApiKey);
 
     private void RefreshEngineLabels()
     {
@@ -612,18 +715,41 @@ public sealed class TrayContext : ApplicationContext
         {
             try
             {
+                // Read the selection while the audio is still being recognized:
+                // the Ctrl+C probe costs ~20 ms and would otherwise be felt.
+                var selectionTask = Task.Run(() => CanEditSelection ? Selection.TryRead() : null, ct);
+
                 var transcript = await TranscribeAsync(wav, ct).ConfigureAwait(false);
                 Log.Info($"STT result: \"{Snip(transcript)}\"");
+                var selection = await selectionTask.ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(transcript)) return;
 
                 bool isTask = LeadsWithTaskKeyword(transcript, _cfg.TaskKeywords, _cfg.TaskKeywordMaxWordPosition, out var stripped);
                 string output;
+                var kind = TakeKind.Dictation;
+                string? source = null;
 
-                if (isTask)
+                if (!string.IsNullOrWhiteSpace(selection))
+                {
+                    // Something was selected: the utterance is an instruction about
+                    // it ("сделай короче") or its replacement — the model decides,
+                    // and either way the result lands on top of the selection.
+                    Log.Info($"edit mode → chat: {selection!.Length} chars selected, said \"{Snip(transcript)}\"");
+                    output = await _groq.ChatAsync(
+                        Groq.EditSelectionUserMessage(selection, isTask ? stripped : transcript),
+                        Groq.EditSelectionSystemPrompt, ct).ConfigureAwait(false);
+                    output = output.Trim();
+                    kind = TakeKind.Edit;
+                    source = selection;
+                    Log.Info($"edit result: \"{Snip(output)}\"");
+                }
+                else if (isTask)
                 {
                     Log.Info($"task mode → chat: \"{Snip(stripped)}\"");
                     output = await _groq.ChatAsync(stripped, ct).ConfigureAwait(false);
                     output = output.Trim();
+                    kind = TakeKind.Task;
+                    source = transcript;
                     Log.Info($"chat result: \"{Snip(output)}\"");
                 }
                 else
@@ -632,9 +758,12 @@ public sealed class TrayContext : ApplicationContext
                 }
 
                 if (!string.IsNullOrEmpty(output))
+                {
+                    _history.Add(output, kind, source);
                     _ui.Post(_ => Paster.Paste(output,
                         restoreClipboard: _cfg.RestoreClipboardAfterPaste,
                         options: BuildPasteOptions()), null);
+                }
 
                 if (_cfg.PlayFeedbackSounds) Click.Low();
             }

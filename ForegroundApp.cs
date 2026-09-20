@@ -59,6 +59,36 @@ public static class ForegroundApp
 
     private static readonly string[] BrowserProcesses = { "chrome", "msedge", "brave", "vivaldi", "opera" };
 
+    /// <summary>The window that currently has the foreground, for handing focus back later.</summary>
+    public static IntPtr Current() => GetForegroundWindow();
+
+    /// <summary>
+    /// Consoles, where Ctrl+C interrupts the running command instead of copying.
+    /// Probing a selection there could kill a build or a server, so we never do.
+    /// </summary>
+    private static readonly string[] ConsoleProcesses =
+    {
+        "WindowsTerminal", "cmd", "powershell", "pwsh", "conhost", "OpenConsole",
+        "mintty", "bash", "sh", "ConEmu", "ConEmu64", "alacritty", "wezterm-gui",
+        "putty", "kitty", "hyper", "Cmder", "Fluent Terminal", "Tabby",
+    };
+
+    /// <summary>True when the focused window is a terminal.</summary>
+    public static bool IsConsole(out string why)
+    {
+        var proc = ProcessName();
+        why = "";
+        foreach (var name in ConsoleProcesses)
+        {
+            if (proc.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                why = $"process '{proc}'";
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static string ProcessName()
     {
         try

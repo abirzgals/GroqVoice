@@ -76,18 +76,7 @@ public static class Paster
         ThreadPool.QueueUserWorkItem(_ =>
         {
             Thread.Sleep(250);
-            var r = new Thread(() =>
-            {
-                try
-                {
-                    if (prev is null) Clipboard.Clear();
-                    else Clipboard.SetText(prev);
-                }
-                catch { }
-            });
-            r.SetApartmentState(ApartmentState.STA);
-            r.Start();
-            r.Join();
+            WriteClipboardText(prev);
         });
     }
 
@@ -152,17 +141,76 @@ public static class Paster
         return GetForegroundWindow() == want;
     }
 
+    /// <summary>
+    /// Gives the foreground back to <paramref name="window"/> and pastes there.
+    /// Used by the history window, whose own window is focused while the user
+    /// picks an entry — without this the text would land in the list box.
+    /// </summary>
+    public static void PasteInto(IntPtr window, string text, bool restoreClipboard, PasteOptions? options)
+    {
+        if (window != IntPtr.Zero && !Activate(window))
+            Log.Warn("paste: could not return focus to the previous window");
+        else if (window != IntPtr.Zero)
+            Thread.Sleep(60);  // let the app settle its caret before Ctrl+V
+
+        Paste(text, restoreClipboard, options);
+    }
+
+    /// <summary>
+    /// Sends Ctrl+C to the focused window. Used to probe what is selected there;
+    /// waits for Win to come up first, exactly as the paste does, so the chord
+    /// that started the dictation cannot turn this into Win+Ctrl+C.
+    /// </summary>
+    public static void SendCtrlC()
+    {
+        for (int i = 0; i < 30 && (IsDown(VK_LWIN) || IsDown(VK_RWIN)); i++)
+            Thread.Sleep(10);
+
+        var inputs = new INPUT[]
+        {
+            Key(VK_CONTROL, false),
+            Key(VK_C,       false),
+            Key(VK_C,       true),
+            Key(VK_CONTROL, true),
+        };
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    /// <summary>Reads the clipboard's text on an STA thread; null if it holds none.</summary>
+    public static string? ReadClipboardText()
+    {
+        string? text = null;
+        RunSta(() => { try { if (Clipboard.ContainsText()) text = Clipboard.GetText(); } catch { } });
+        return text;
+    }
+
+    /// <summary>Puts text back on the clipboard, or clears it when <paramref name="text"/> is null.</summary>
+    public static void WriteClipboardText(string? text)
+    {
+        RunSta(() =>
+        {
+            try { if (text is null) Clipboard.Clear(); else Clipboard.SetText(text); }
+            catch (Exception ex) { Log.Warn($"clipboard restore failed: {ex.Message}"); }
+        });
+    }
+
+    /// <summary>Clipboard calls need an STA thread; this is the only place that makes one.</summary>
+    private static void RunSta(Action action)
+    {
+        var t = new Thread(() => action());
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+    }
+
     private static void SetClipboard(string text, bool keepPrevious, out string? previous)
     {
         string? prev = null;
-        var t = new Thread(() =>
+        RunSta(() =>
         {
             try { if (keepPrevious && Clipboard.ContainsText()) prev = Clipboard.GetText(); } catch { }
             try { Clipboard.SetText(text); } catch (Exception ex) { Log.Warn($"clipboard set failed: {ex.Message}"); }
         });
-        t.SetApartmentState(ApartmentState.STA);
-        t.Start();
-        t.Join();
         previous = prev;
     }
 
@@ -227,6 +275,7 @@ public static class Paster
     private const uint KEYEVENTF_KEYUP = 0x0002;
     private const uint KEYEVENTF_UNICODE = 0x0004;
     private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_C = 0x43;
     private const ushort VK_V = 0x56;
     private const ushort VK_LWIN = 0x5B;
     private const ushort VK_RWIN = 0x5C;

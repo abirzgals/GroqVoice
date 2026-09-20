@@ -35,7 +35,7 @@ cd macos && ./build-app.sh && ditto GroqVoice.app /Applications/GroqVoice.app &&
 ## What it is
 
 Lightweight Windows tray app for fast voice dictation and voice-driven LLM tasks via [Groq](https://groq.com).
-Hold **Win+Ctrl**, speak, release — your speech gets transcribed (Whisper) and pasted into the focused window. Start your sentence with `task` / `задача` / `задание` and the transcript is routed through Llama 3.3 70B instead, so you can say *"task: draw an ASCII cat"* and have the result pasted.
+Hold **Win+Ctrl**, speak, release — your speech gets transcribed (Whisper) and pasted into the focused window. Start your sentence with `task` / `задача` / `задание` and the transcript is routed through an LLM instead, so you can say *"task: draw an ASCII cat"* and have the result pasted.
 
 Russian + English mixed dictation works out of the box.
 
@@ -48,7 +48,7 @@ Russian + English mixed dictation works out of the box.
 - **Hot-key push-to-talk** — удерживаешь Win+Ctrl, говоришь, отпускаешь. Иконка в трее: 🟢 ready → 🔴 recording → 🟡 processing → 🟢.
 - **Два движка распознавания** — Whisper через Groq (`whisper-large-v3`, облако) или **Parakeet TDT v3 прямо на этом ПК** (офлайн, без API-ключа, ~0.35 с на фразу). Переключается в трее: Recognition → Parakeet v3; модель (460 МБ) скачивается по запросу, с подтверждением и процентами. Оба движка держат смешанную русско-английскую речь без смены настроек.
 - **Vocabulary file** — словарь редких слов / имён собственных / терминов биасит распознавание (см. ниже).
-- **Task mode** — если речь начинается с `task` / `задача` / `задание` (в первых 4 словах), transcript уходит в `llama-3.3-70b-versatile` и в фокусированное окно вставляется ответ модели, а не сама фраза.
+- **Task mode** — если речь начинается с `task` / `задача` / `задание` (в первых 4 словах), transcript уходит в LLM (`chatModel`, по умолчанию `qwen/qwen3.8-27b`) и в фокусированное окно вставляется ответ модели, а не сама фраза.
 - **Tray-only** — никаких окон, autostart с Windows опционально, ~40 MB RAM (~740 MB, пока загружена локальная модель).
 - **Filters** — пустые / слишком короткие записи (< 1 c, peak < 1%) не отправляются в распознавание, экономя API-кредиты и время.
 
@@ -89,7 +89,8 @@ cd GroqVoice
 | **Win+Ctrl+Alt** (все три вместе) | Snipping: экран фризится, мышкой выделяешь область → картинка в clipboard |
 | Begin with `task: …` / `задача: …` | LLM-ответ → paste в активное окно |
 | **Win+Ctrl + любая клавиша** | OS shortcut работает обычно (Win+Ctrl+D, Win+Ctrl+→ и т.д.); запись отбрасывается |
-| Right-click tray | Setup, Open config / vocabulary / log, Microphone picker, Start with Windows, Quit |
+| Выдели текст, hold Win+Ctrl, скажи «сделай короче» | Результат заменяет выделение (см. «Правка выделенного») |
+| Right-click tray | Settings, History, Recent / Paste last again, Recognition, Setup, Microphone picker, Quit |
 
 **Hotkey-режимы.** Удерживание = push-to-talk (для коротких реплик, как сейчас). Быстрый двойной тап Win+Ctrl = lock-on: можно отпустить клавиши и говорить хоть минуту, любой одиночный нажим клавишь Win+Ctrl завершает. Граница между «тап» и «hold» — 250 мс (`pttHoldMs`); окно второго тапа — 400 мс (`doubleTapWindowMs`).
 
@@ -101,6 +102,44 @@ cd GroqVoice
 - *«task: explain stale closures in react in one sentence»* → пастится одно предложение
 
 Ключевик ловится только если он среди **первых 4 слов** транскрипта (настраивается `taskKeywordMaxWordPosition`). Так длинная фраза, в которой слово «задача» случайно встречается в середине, не превратится в LLM-запрос.
+
+---
+
+## Правка выделенного голосом / Edit the selection
+
+Выделил текст в любом приложении, удержал клавишу диктовки, сказал что с ним сделать —
+результат заменяет выделение. «Сделай короче», «переведи на английский», «исправь ошибки»,
+«перепиши формально». Если сказанное не похоже на команду, оно просто встаёт вместо выделения.
+
+Приложение узнаёт о выделении единственным способом, который понимают все окна Windows, —
+посылает **Ctrl+C** и смотрит на буфер обмена (буфер потом возвращается как был). Отсюда
+следствия, о которых лучше знать заранее:
+
+- **Терминалы пропускаются**: там Ctrl+C прерывает запущенную команду, а не копирует. Список
+  процессов — `WindowsTerminal`, `cmd`, `powershell`, `pwsh`, `ConEmu`, `mintty` и т.д.
+- **Терминал внутри редактора выглядит как редактор** (панель в VS Code — это процесс `Code`),
+  так что там проба всё-таки уйдёт. Диктуете в такую панель — выключите режим:
+  Settings → LLM & editing → *Edit selected text by voice* (или `editSelection: false`).
+- VS Code при пустом выделении копирует всю строку и помечает это в своём формате буфера —
+  такой «фантом» распознаётся и игнорируется.
+
+Нужен ключ Groq: решение «команда это или просто текст» принимает модель. Без ключа проба
+не делается вовсе.
+
+---
+
+## История / History
+
+Каждый результат — диктовка, ответ task-режима, правка выделенного — пишется в
+`%APPDATA%\GroqVoice\history.jsonl` (по строке JSON на запись). В трее:
+
+- **Recent** — последние 10, клик вставляет запись в активное окно;
+- **Paste last again** — повторить последнюю вставку (спасает, когда вставка ушла не в то окно);
+- **History…** — окно со списком, текстом целиком и кнопками Paste / Copy / Delete / Clear.
+  **Show original** показывает, что уходило в модель: неудачный перевод или переписывание
+  не стоит потери исходного текста.
+
+Сколько записей хранить — `historySize` (по умолчанию 50, `0` выключает историю).
 
 ---
 
@@ -132,7 +171,7 @@ cd GroqVoice
 |---|---|---|
 | `groqApiKey` | `""` | Ключ с [console.groq.com](https://console.groq.com). Хранится локально в `%APPDATA%`, в репозиторий не попадает. |
 | `transcriptionModel` | `whisper-large-v3` | STT-модель Groq. |
-| `chatModel` | `llama-3.3-70b-versatile` | LLM для task-режима. |
+| `chatModel` | `qwen/qwen3.8-27b` | LLM для task-режима и правки выделенного. Модели Llama 3.x с Groq убраны — старый конфиг мигрируется автоматически. |
 | `sttEngine` | `groq` | `groq` — Whisper в облаке; `parakeet` — локально на этом ПК. Те же значения, что в macOS-сборке. |
 | `sttFallback` | `true` | Если выбранный движок не смог (нет модели, нет сети, ошибка API) — попробовать второй, а не терять диктовку. |
 | `localUnloadAfterMinutes` | `0` | Через сколько минут простоя выгрузить локальную модель из памяти. `0` = держать загруженной (быстрее). |
@@ -142,6 +181,8 @@ cd GroqVoice
 | `inputDeviceContains` | `""` | Substring имени микрофона. Пусто = system default. Удобнее переключать через Tray → Microphone. |
 | `minRecordingSeconds` | `1.0` | Записи короче этого не уходят в Groq. |
 | `silencePeakPercent` | `1.0` | Порог тишины в % от full-scale 16-bit. Записи тише этого отбрасываются. |
+| `historySize` | `50` | Сколько результатов хранить в `history.jsonl`. `0` — не вести историю. |
+| `editSelection` | `true` | Правка выделенного текста голосом (проба Ctrl+C, нужен ключ). |
 | `saveLastWav` | `true` | Сохранять последнюю запись в `last.wav` для отладки. |
 | `playFeedbackSounds` | `true` | Системные звуки на старт/стоп записи. |
 | `autostart` | `true` | Запуск с Windows через `HKCU\…\Run`. |

@@ -13,6 +13,22 @@ internal static class Program
         if (t >= 0 && t + 1 < args.Length) { Environment.ExitCode = Transcribe(args[t + 1]); return; }
         if (args.Contains("--download-model")) { Environment.ExitCode = DownloadModel(); return; }
 
+        int p = Array.IndexOf(args, "--probe-selection");
+        if (p >= 0)
+        {
+            int wait = p + 1 < args.Length && int.TryParse(args[p + 1], out var s) ? s : 5;
+            Environment.ExitCode = ProbeSelection(wait);
+            return;
+        }
+
+        int e = Array.IndexOf(args, "--edit");
+        if (e >= 0 && e + 2 < args.Length) { Environment.ExitCode = EditSelection(args[e + 1], args[e + 2]); return; }
+
+        if (args.Contains("--selftest-selection")) { Environment.ExitCode = SelfTestSelection(); return; }
+
+        int u = Array.IndexOf(args, "--snapshot-ui");
+        if (u >= 0) { Environment.ExitCode = SnapshotUi(u + 1 < args.Length ? args[u + 1] : "."); return; }
+
         using var mutex = new Mutex(initiallyOwned: true, name: "Global\\GroqVoice.SingleInstance", out bool created);
         if (!created) { Log.Info("another instance already running, exiting"); return; }
 
@@ -121,6 +137,146 @@ internal static class Program
             Console.Error.WriteLine($"\n{ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// `GroqVoice.exe --probe-selection [seconds]` — waits, then reports what the
+    /// then-focused window hands over on Ctrl+C. Shows what the editing mode would
+    /// see, without having to dictate into a real app.
+    /// </summary>
+    private static int ProbeSelection(int waitSeconds)
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        Console.Out.WriteLine($"select some text somewhere — probing in {waitSeconds} s…");
+        Console.Out.Flush();
+        Thread.Sleep(TimeSpan.FromSeconds(Math.Clamp(waitSeconds, 0, 60)));
+
+        Console.Out.WriteLine($"focused: {ForegroundApp.Describe()}");
+        var text = Selection.TryRead();
+        if (text is null) { Console.Out.WriteLine("selection: none"); return 1; }
+        Console.Out.WriteLine($"selection ({text.Length} chars): {text}");
+        return 0;
+    }
+
+    /// <summary>
+    /// `GroqVoice.exe --selftest-selection` — checks the whole selection probe
+    /// against a text box of our own: focus, Ctrl+C, clipboard read, restore.
+    /// Uses our own window on purpose — driving synthetic keys into whatever the
+    /// user happens to have focused is not something a test may do.
+    /// </summary>
+    private static int SelfTestSelection()
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        const string Sample = "Selection probe sample — выделенный текст.";
+        string? probed = null;
+        string? clipboardBefore = Paster.ReadClipboardText();
+        const string Sentinel = "GroqVoice self-test clipboard";
+
+        ApplicationConfiguration.Initialize();
+        Paster.WriteClipboardText(Sentinel);
+
+        var form = new Form { Width = 420, Height = 160, Text = "GroqVoice self-test", TopMost = true };
+        var box = new TextBox { Dock = DockStyle.Fill, Multiline = true, Text = Sample };
+        form.Controls.Add(box);
+        form.Shown += async (_, _) =>
+        {
+            box.Focus();
+            box.SelectAll();
+            await Task.Delay(250);
+            probed = await Task.Run(Selection.TryRead);
+            form.Close();
+        };
+        Application.Run(form);
+
+        string? clipboardAfter = Paster.ReadClipboardText();
+        Paster.WriteClipboardText(clipboardBefore);
+
+        Console.Out.WriteLine($"probed:    {probed ?? "(null)"}");
+        Console.Out.WriteLine($"expected:  {Sample}");
+        Console.Out.WriteLine($"restored:  {(clipboardAfter == Sentinel ? "yes" : $"NO — clipboard held \"{clipboardAfter}\"")}");
+
+        bool ok = probed?.Trim() == Sample && clipboardAfter == Sentinel;
+        Console.Out.WriteLine(ok ? "PASS" : "FAIL");
+        return ok ? 0 : 1;
+    }
+
+    /// <summary>
+    /// `GroqVoice.exe --edit "selected text" "what was said"` — runs the editing
+    /// stage without a microphone or a selection, to check the prompt and the model.
+    /// </summary>
+    private static int EditSelection(string selection, string spoken)
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        try
+        {
+            var cfg = Config.Load();
+            var groq = new Groq(cfg);
+            var answer = groq.ChatAsync(Groq.EditSelectionUserMessage(selection, spoken),
+                                        Groq.EditSelectionSystemPrompt)
+                             .GetAwaiter().GetResult();
+            Console.Out.WriteLine(answer.Trim());
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// `GroqVoice.exe --snapshot-ui <dir>` — renders the Settings and History
+    /// windows to PNGs and exits. Checks that they build and lay out, without a
+    /// human opening every tab.
+    /// </summary>
+    private static int SnapshotUi(string dir)
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        try
+        {
+            ApplicationConfiguration.Initialize();
+            Directory.CreateDirectory(dir);
+            var cfg = Config.Load();
+
+            using (var settings = new SettingsForm(cfg))
+                Shoot(settings, Path.Combine(dir, "settings.png"), tabs: true);
+
+            var history = new History(cfg.HistorySize);
+            using (var form = new HistoryForm(history, () => new PasteOptions(), false))
+                Shoot(form, Path.Combine(dir, "history.png"));
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex.ToString());
+            return 1;
+        }
+    }
+
+    /// <summary>Shows a window off-screen, renders it, and each of its tabs.</summary>
+    private static void Shoot(Form form, string path, bool tabs = false)
+    {
+        form.StartPosition = FormStartPosition.Manual;
+        form.Location = new System.Drawing.Point(-4000, -4000);
+        form.Show();
+        Application.DoEvents();
+
+        var tabControl = form.Controls.OfType<TabControl>().FirstOrDefault();
+        int pages = tabs && tabControl != null ? tabControl.TabPages.Count : 1;
+        for (int i = 0; i < pages; i++)
+        {
+            if (tabControl != null && tabs) { tabControl.SelectedIndex = i; Application.DoEvents(); }
+            using var bmp = new Bitmap(form.Width, form.Height);
+            form.DrawToBitmap(bmp, new Rectangle(0, 0, form.Width, form.Height));
+            var name = pages > 1
+                ? Path.Combine(Path.GetDirectoryName(path)!,
+                               $"{Path.GetFileNameWithoutExtension(path)}-{i + 1}-{tabControl!.TabPages[i].Text}.png")
+                : path;
+            bmp.Save(name, System.Drawing.Imaging.ImageFormat.Png);
+            Console.Out.WriteLine(name);
+        }
+        form.Hide();
     }
 
     private const int ATTACH_PARENT_PROCESS = -1;
