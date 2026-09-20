@@ -5,7 +5,7 @@ struct GroqError: LocalizedError {
     let body: String
     let retryAfter: TimeInterval?
 
-    var errorDescription: String? { "Groq HTTP \(status): \(body.prefix(400))" }
+    var errorDescription: String? { "HTTP \(status): \(body.prefix(400))" }
 
     /// 429 = rate limit, 404/400 = model not found / decommissioned,
     /// 498/503 = capacity — all worth trying the next model in the chain.
@@ -42,13 +42,28 @@ struct GroqError: LocalizedError {
 
 final class GroqClient {
     var apiKey: String
-    private let sttChain: ModelChain
-    private let chatChain: ModelChain
+    /// Chat completions endpoint (OpenAI-compatible) and its key; STT always goes to Groq.
+    var chatBaseURL: String
+    var chatApiKey: String
+    private var sttChain: ModelChain
+    private var chatChain: ModelChain
 
-    init(apiKey: String, transcriptionModels: [String], chatModels: [String]) {
+    init(apiKey: String, transcriptionModels: [String], chatModels: [String],
+         chatBaseURL: String = Config.groqBaseURL, chatApiKey: String = "") {
         self.apiKey = apiKey
+        self.chatBaseURL = chatBaseURL
+        self.chatApiKey = chatApiKey
         self.sttChain = ModelChain(transcriptionModels)
         self.chatChain = ModelChain(chatModels)
+    }
+
+    /// Re-reads everything network-related from a saved config.
+    func apply(_ cfg: Config) {
+        apiKey = cfg.groqApiKey
+        chatBaseURL = cfg.chatBaseURL
+        chatApiKey = cfg.effectiveChatApiKey
+        sttChain = ModelChain(cfg.transcriptionModels)
+        chatChain = ModelChain(cfg.chatModels)
     }
 
     func transcribe(wav: Data, language: String, prompt: String) async throws -> String {
@@ -57,9 +72,9 @@ final class GroqClient {
         }
     }
 
-    func chat(userText: String, systemPrompt: String) async throws -> String {
+    func chat(userText: String, systemPrompt: String, temperature: Double = 0.3) async throws -> String {
         try await withFallback(chain: chatChain, kind: "chat") { model in
-            try await self.chatOnce(userText: userText, model: model, systemPrompt: systemPrompt)
+            try await self.chatOnce(userText: userText, model: model, systemPrompt: systemPrompt, temperature: temperature)
         }
     }
 
@@ -156,22 +171,32 @@ final class GroqClient {
         return r.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func chatOnce(userText: String, model: String, systemPrompt: String) async throws -> String {
-        let url = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
+    private func chatOnce(userText: String, model: String, systemPrompt: String, temperature: Double) async throws -> String {
+        let base = chatBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: " /"))
+        guard let url = URL(string: (base.isEmpty ? Config.groqBaseURL : base) + "/chat/completions") else {
+            throw GroqError(status: 0, body: "invalid chat endpoint URL: \(chatBaseURL)", retryAfter: nil)
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let key = chatApiKey.isEmpty ? apiKey : chatApiKey
+        if !key.isEmpty { req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 25  // backstop: don't hang if the link dies mid-request
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "model": model,
-            "temperature": 0.3,
+            "temperature": temperature,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": userText],
             ],
         ]
+        // gpt-oss "thinks" before answering and bills those tokens; our jobs
+        // (translate, clean up, short commands) don't need deep reasoning.
+        // Groq-only: other OpenAI-compatible servers may reject the field.
+        if url.host == "api.groq.com", model.hasPrefix("openai/gpt-oss") {
+            payload["reasoning_effort"] = "low"
+        }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
         let (data, resp) = try await send(req)

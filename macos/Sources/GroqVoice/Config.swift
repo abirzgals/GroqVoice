@@ -1,29 +1,130 @@
 import Foundation
 
+/// What an extra push-to-talk key does with what you say — or, when text was
+/// selected as the key went down, with that text.
+struct KeyAction: Codable, Equatable {
+    enum Kind: String, Codable { case translate, prompt }
+
+    var key: HotkeyKey
+    var kind: Kind
+    var language = "en"      // translate: target language code
+    var prompt = ""          // prompt: the instruction applied to the text
+
+    var isTranslate: Bool { kind == .translate }
+    var languageName: String { Config.translateLanguages.first { $0.code == language }?.name ?? language }
+
+    /// Short description for menus and logs.
+    var summary: String {
+        if isTranslate { return "translate into \(languageName)" }
+        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.isEmpty { return "custom prompt (not set)" }
+        return p.count > 48 ? String(p.prefix(45)) + "…" : p
+    }
+}
+
+extension KeyAction {
+    // `language` / `prompt` may be missing in a hand-written entry.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decode(HotkeyKey.self, forKey: .key)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        language = try c.decodeIfPresent(String.self, forKey: .language) ?? "en"
+        prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+    }
+}
+
+enum STTEngine: String, Codable {
+    case parakeet   // on-device Parakeet TDT v3 (default)
+    case groq       // Whisper via the Groq API
+}
+
+/// Everything in config.json. Codable is synthesized: a new setting is one
+/// property with its default — `decode(from:)` fills in whatever a file lacks.
 struct Config: Codable {
     var groqApiKey = ""
     /// Priority order: strongest first. On a rate limit the next model is used;
     /// the stronger one is retried automatically once its cooldown expires.
     var transcriptionModels = ["whisper-large-v3", "whisper-large-v3-turbo"]
-    var chatModels = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
+    /// Checked against the live Groq API on 2026-09-03 (Llama 3.x is gone).
+    /// Qwen 3.8 27B goes first: on a one-sentence translation it answered in
+    /// 0.2 s using 130 tokens, where the gpt-oss models spend 0.5 s and
+    /// 300–400 tokens on hidden reasoning — and the free tier meters tokens
+    /// per minute. The stronger gpt-oss-120b stays as the fallback.
+    var chatModels = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+    /// Where chat completions go (task mode, clean-up, translation). Any
+    /// OpenAI-compatible server works: Groq (default), Ollama on this Mac
+    /// (http://localhost:11434/v1), LM Studio, OpenAI, OpenRouter, …
+    var chatBaseURL = Config.groqBaseURL
+    /// Key for `chatBaseURL`; empty = reuse `groqApiKey` (Ollama needs none).
+    var chatApiKey = ""
+    /// ISO code ("ru", "en", "lv") or "" for auto-detect. For the on-device
+    /// engine a fixed language only filters tokens by script, so leave it on
+    /// auto for mixed Russian/English speech.
     var language = ""
     var taskKeywords = ["task", "задача", "задание"]
     var taskKeywordMaxWordPosition = 3
-    var minRecordingSeconds = 1.0
+    /// Takes shorter than this are dropped as accidental. Measured on captured
+    /// audio, so keep it well under a one-word utterance (~0.5 s).
+    var minRecordingSeconds = 0.3
     var silencePeakPercent = 1.0
     var saveLastWav = true
     var playFeedbackSounds = true
     var taskSystemPrompt = ""
     var pttHoldMs = 250.0
     var doubleTapWindowMs = 400.0
-    var autostart = true
-    /// "off" — Groq only; "fallback" — local Whisper when offline/Groq fails
-    /// (only if the model is already downloaded); "always" — fully local.
-    var localMode = "fallback"
-    /// WhisperKit model name; "" = auto-pick recommended for this Mac.
-    /// Default: quantized large-v3-turbo — best RU/EN quality per MB (~626 MB).
-    var localWhisperModel = "openai_whisper-large-v3-v20240930_626MB"
-    var localUnloadAfterMinutes = 120.0
+    /// Keep recording this long after the key is released so the last syllable
+    /// isn't clipped when the key comes up mid-word. Every millisecond here is
+    /// felt as latency, so keep it just above the audio pipeline's buffer.
+    var releaseTailMs = 150.0
+    /// Login item. Off by default — enable in Settings.
+    var autostart = false
+
+    var sttEngine = STTEngine.parakeet
+    /// If the chosen engine can't serve a take (model still downloading, no
+    /// network, API error), try the other one instead of failing.
+    var sttFallback = true
+    /// Minutes of idle before the local model is unloaded; 0 = keep it warm.
+    var localUnloadAfterMinutes = 0.0
+
+    /// Push-to-talk key.
+    var hotkey = HotkeyKey.fn
+    /// Extra push-to-talk keys, each with its own action (translate into a
+    /// language, or a custom prompt). Needs an LLM backend.
+    var keyActions: [KeyAction] = []
+    /// CoreAudio device UID; "" = system default input.
+    var inputDeviceUID = ""
+    /// Run the transcript through the LLM to fix punctuation and drop filler
+    /// words (wording is kept). Needs Groq or Apple Intelligence.
+    var cleanupTranscript = false
+    var pasteMode = PasteMode.paste
+    /// Look at the text around the caret (Accessibility) and add a space /
+    /// fix the first letter's case when inserting mid-sentence.
+    var smartSpacing = true
+    /// "новая строка" / "абзац" / "new line" become line breaks.
+    var spokenFormatting = true
+    /// With text selected when the key goes down, what you say is treated as
+    /// an instruction about it (or as its replacement). Needs an LLM.
+    var editSelection = true
+    /// Record from the built-in microphone when the system default is a
+    /// Bluetooth headset (AirPods) — better audio, and the headset keeps
+    /// its high-quality output profile.
+    var preferBuiltInMic = true
+    var restoreClipboard = true
+    var historySize = 50
+
+    static let groqBaseURL = "https://api.groq.com/openai/v1"
+
+    var usesGroqForChat: Bool { chatBaseURL.trimmingCharacters(in: .whitespaces).isEmpty || chatBaseURL == Config.groqBaseURL }
+    var effectiveChatApiKey: String { chatApiKey.isEmpty ? groqApiKey : chatApiKey }
+    var chatHost: String { URL(string: chatBaseURL)?.host ?? "api.groq.com" }
+    var chatPort: UInt16 {
+        let url = URL(string: chatBaseURL)
+        if let port = url?.port { return UInt16(port) }
+        return url?.scheme?.lowercased() == "http" ? 80 : 443
+    }
+    /// True when some chat backend is configured: a Groq key, or a custom
+    /// endpoint (which may need no key at all).
+    var llmConfigured: Bool { !usesGroqForChat || !groqApiKey.isEmpty }
 
     static var supportDir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -32,83 +133,83 @@ struct Config: Codable {
         return dir
     }
 
+    /// The folder holds the API key, the log and the history of everything
+    /// dictated: owner-only. Closing the folder covers every file in it.
+    static func protectSupportDir() {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: supportDir.path)
+    }
+
     static var fileURL: URL { supportDir.appendingPathComponent("config.json") }
 
-    enum CodingKeys: String, CodingKey {
-        case groqApiKey, transcriptionModels, chatModels, language
-        case taskKeywords, taskKeywordMaxWordPosition
-        case minRecordingSeconds, silencePeakPercent
-        case saveLastWav, playFeedbackSounds, taskSystemPrompt
-        case pttHoldMs, doubleTapWindowMs, autostart
-        case localMode, localWhisperModel, localUnloadAfterMinutes
-        // Legacy single-model keys, migrated to the list fields on load.
-        case transcriptionModel, chatModel
+    var usesLocalEngine: Bool { sttEngine == .parakeet }
+
+    /// The action bound to `key`, unless it is the main dictation key.
+    func action(for key: HotkeyKey) -> KeyAction? {
+        guard key != hotkey else { return nil }
+        return keyActions.first { $0.key == key }
     }
 
-    init() {}
+    /// Actions on keys other than the main one.
+    var activeKeyActions: [KeyAction] { keyActions.filter { $0.key != hotkey } }
 
-    // Tolerate missing keys in an existing config.json so upgrades don't reset settings.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let d = Config()
-        groqApiKey = try c.decodeIfPresent(String.self, forKey: .groqApiKey) ?? d.groqApiKey
-
-        if let list = try c.decodeIfPresent([String].self, forKey: .transcriptionModels) {
-            transcriptionModels = list
-        } else if let legacy = try c.decodeIfPresent(String.self, forKey: .transcriptionModel) {
-            transcriptionModels = [legacy] + d.transcriptionModels.filter { $0 != legacy }
-        }
-        if let list = try c.decodeIfPresent([String].self, forKey: .chatModels) {
-            chatModels = list
-        } else if let legacy = try c.decodeIfPresent(String.self, forKey: .chatModel) {
-            chatModels = [legacy] + d.chatModels.filter { $0 != legacy }
-        }
-
-        language = try c.decodeIfPresent(String.self, forKey: .language) ?? d.language
-        taskKeywords = try c.decodeIfPresent([String].self, forKey: .taskKeywords) ?? d.taskKeywords
-        taskKeywordMaxWordPosition = try c.decodeIfPresent(Int.self, forKey: .taskKeywordMaxWordPosition) ?? d.taskKeywordMaxWordPosition
-        minRecordingSeconds = try c.decodeIfPresent(Double.self, forKey: .minRecordingSeconds) ?? d.minRecordingSeconds
-        silencePeakPercent = try c.decodeIfPresent(Double.self, forKey: .silencePeakPercent) ?? d.silencePeakPercent
-        saveLastWav = try c.decodeIfPresent(Bool.self, forKey: .saveLastWav) ?? d.saveLastWav
-        playFeedbackSounds = try c.decodeIfPresent(Bool.self, forKey: .playFeedbackSounds) ?? d.playFeedbackSounds
-        taskSystemPrompt = try c.decodeIfPresent(String.self, forKey: .taskSystemPrompt) ?? d.taskSystemPrompt
-        pttHoldMs = try c.decodeIfPresent(Double.self, forKey: .pttHoldMs) ?? d.pttHoldMs
-        doubleTapWindowMs = try c.decodeIfPresent(Double.self, forKey: .doubleTapWindowMs) ?? d.doubleTapWindowMs
-        autostart = try c.decodeIfPresent(Bool.self, forKey: .autostart) ?? d.autostart
-        localMode = try c.decodeIfPresent(String.self, forKey: .localMode) ?? d.localMode
-        localWhisperModel = try c.decodeIfPresent(String.self, forKey: .localWhisperModel) ?? d.localWhisperModel
-        localUnloadAfterMinutes = try c.decodeIfPresent(Double.self, forKey: .localUnloadAfterMinutes) ?? d.localUnloadAfterMinutes
+    /// Replaces (or with nil removes) the action for a key.
+    mutating func setAction(_ action: KeyAction?, for key: HotkeyKey) {
+        keyActions.removeAll { $0.key == key }
+        if var action { action.key = key; keyActions.append(action) }
     }
 
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(groqApiKey, forKey: .groqApiKey)
-        try c.encode(transcriptionModels, forKey: .transcriptionModels)
-        try c.encode(chatModels, forKey: .chatModels)
-        try c.encode(language, forKey: .language)
-        try c.encode(taskKeywords, forKey: .taskKeywords)
-        try c.encode(taskKeywordMaxWordPosition, forKey: .taskKeywordMaxWordPosition)
-        try c.encode(minRecordingSeconds, forKey: .minRecordingSeconds)
-        try c.encode(silencePeakPercent, forKey: .silencePeakPercent)
-        try c.encode(saveLastWav, forKey: .saveLastWav)
-        try c.encode(playFeedbackSounds, forKey: .playFeedbackSounds)
-        try c.encode(taskSystemPrompt, forKey: .taskSystemPrompt)
-        try c.encode(pttHoldMs, forKey: .pttHoldMs)
-        try c.encode(doubleTapWindowMs, forKey: .doubleTapWindowMs)
-        try c.encode(autostart, forKey: .autostart)
-        try c.encode(localMode, forKey: .localMode)
-        try c.encode(localWhisperModel, forKey: .localWhisperModel)
-        try c.encode(localUnloadAfterMinutes, forKey: .localUnloadAfterMinutes)
+    static let translateLanguages: [(code: String, name: String)] = [
+        ("en", "English"), ("lv", "Latvian"), ("ru", "Russian"), ("uk", "Ukrainian"),
+        ("de", "German"), ("es", "Spanish"), ("fr", "French"), ("it", "Italian"), ("pl", "Polish"),
+        ("et", "Estonian"), ("lt", "Lithuanian"), ("pt", "Portuguese"), ("nl", "Dutch"),
+        ("sv", "Swedish"), ("tr", "Turkish"), ("zh", "Chinese"), ("ja", "Japanese"),
+    ]
+    static let recognitionLanguages: [(code: String, name: String)] = [
+        ("", "Auto-detect"), ("ru", "Русский"), ("en", "English"), ("lv", "Latviešu"), ("uk", "Українська"),
+        ("de", "Deutsch"), ("es", "Español"), ("fr", "Français"), ("it", "Italiano"), ("pl", "Polski"),
+    ]
+
+    // MARK: - Loading and saving
+
+    /// Reads a config laid over the defaults, so a file written by an older
+    /// version (or by hand) may lack keys. A value that doesn't fit — a typo in
+    /// a hand edit — costs only that key, never the rest of the settings.
+    static func decode(from data: Data) -> Config? {
+        func object(_ data: Data) -> [String: Any]? { (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] }
+        func config(_ dict: [String: Any]) -> Config? {
+            (try? JSONSerialization.data(withJSONObject: dict)).flatMap { try? JSONDecoder().decode(Config.self, from: $0) }
+        }
+        guard let file = object(data), let defaults = (try? JSONEncoder().encode(Config())).flatMap(object) else { return nil }
+
+        let known = file.filter { defaults[$0.key] != nil }
+        if let cfg = config(defaults.merging(known) { _, new in new }) { return cfg }
+
+        var merged = defaults
+        for (key, value) in known {
+            var candidate = merged
+            candidate[key] = value
+            if config(candidate) != nil { merged = candidate } else { Log.write("config: ignoring the invalid value of \(key)") }
+        }
+        return config(merged)
     }
 
     static func load() -> Config {
-        if let data = try? Data(contentsOf: fileURL),
-           let cfg = try? JSONDecoder().decode(Config.self, from: data) {
-            cfg.save()  // rewrite in the current schema (migrates legacy keys)
+        guard let data = try? Data(contentsOf: fileURL) else {
+            let cfg = Config()
+            cfg.save()
             return cfg
         }
-        let cfg = Config()
-        cfg.save()
+        guard let cfg = decode(from: data) else {
+            // Not JSON at all: start from the defaults, but keep the file for its owner.
+            let aside = supportDir.appendingPathComponent("config.broken.json")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: fileURL, to: aside)
+            Log.write("config.json is unreadable — moved to config.broken.json, starting from defaults")
+            let cfg = Config()
+            cfg.save()
+            return cfg
+        }
+        cfg.save()  // rewrite with the current set of keys
         return cfg
     }
 
@@ -116,7 +217,7 @@ struct Config: Codable {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? enc.encode(self) {
-            try? data.write(to: Config.fileURL)
+            try? data.write(to: Config.fileURL, options: .atomic)
         }
     }
 }

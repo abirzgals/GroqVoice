@@ -24,8 +24,8 @@ done
 if [ "$UNIVERSAL" = 1 ]; then
   # Per-arch builds + lipo: works with Command Line Tools alone
   # (swift build --arch … needs full Xcode).
-  swift build -c release --triple arm64-apple-macosx13.0
-  swift build -c release --triple x86_64-apple-macosx13.0
+  swift build -c release --triple arm64-apple-macosx14.0
+  swift build -c release --triple x86_64-apple-macosx14.0
   BIN=.build/GroqVoice-universal
   lipo -create -output "$BIN" \
     .build/arm64-apple-macosx/release/GroqVoice \
@@ -40,6 +40,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/GroqVoice"
 cp Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+[ -f Resources/AppIcon.icns ] || ./Resources/make-icns.sh
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 if [ "$MAKE_DIST" = 1 ]; then
   IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -52,7 +55,11 @@ if [ "$MAKE_DIST" = 1 ]; then
     --entitlements GroqVoice.entitlements \
     --sign "$IDENTITY" "$APP"
 else
-  codesign --force --sign - "$APP"
+  # Ad-hoc, but with a designated requirement that names the bundle identifier
+  # instead of the binary's cdhash — so TCC grants (Accessibility, Microphone)
+  # survive rebuilds instead of silently detaching from the app.
+  codesign --force --sign - \
+    -r='designated => identifier "com.abirzgals.groqvoice"' "$APP"
 fi
 
 echo

@@ -13,17 +13,22 @@
 > Click any link above and the .exe starts downloading immediately — no need to dig through GitHub's UI.
 > **Windows SmartScreen** may warn the .exe is from an unidentified publisher (it isn't code-signed yet). Click **More info → Run anyway**.
 
-### 🍎 macOS (Apple Silicon + Intel, macOS 13+)
+### 🍎 macOS (Apple Silicon, macOS 14+)
 
-Нативная Mac-версия (Swift, menu bar, push-to-talk на **Fn/🌐**). Установка одной командой в Terminal:
+Нативная Mac-версия (Swift, menu bar, push-to-talk на **Fn/🌐**). Распознаёт **на самом Маке** —
+NVIDIA Parakeet TDT v3 через [FluidAudio](https://github.com/FluidInference/FluidAudio) (CoreML /
+Neural Engine): офлайн, без аккаунта, ~0.2 с на фразу. Groq остаётся облачной опцией и мозгом для
+task-режима, перевода и сниппетов. Сборка из исходников (нужны Command Line Tools):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/abirzgals/GroqVoice/main/macos/install.sh | bash
+cd macos && ./build-app.sh && ditto GroqVoice.app /Applications/GroqVoice.app && open /Applications/GroqVoice.app
 ```
 
-Или вручную: **[GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip)** *(200 KB, universal)* — распакуй и перенеси в /Applications (пока без нотаризации: один раз `xattr -cr /Applications/GroqVoice.app`). При первом запуске разреши Microphone и Accessibility (промпты откроются сами) и вставь Groq API-ключ.
+При первом запуске разреши Microphone и Accessibility (промпты откроются сами).
 
-Сборка из исходников и подробности — в [macos/README.md](macos/README.md). Страница загрузки: **[abirzgals.github.io/GroqVoice](https://abirzgals.github.io/GroqVoice/)**
+> Готовые **[GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip)** / `.dmg` в релизах — это ещё прошлая, облачная сборка (июнь); локальный Parakeet пока только из исходников.
+
+Возможности, настройки, словарь и сниппеты — в [macos/README.md](macos/README.md). Страница загрузки: **[abirzgals.github.io/GroqVoice](https://abirzgals.github.io/GroqVoice/)**
 
 ---
 

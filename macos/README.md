@@ -1,93 +1,236 @@
 # GroqVoice for macOS
 
-Нативный macOS-порт [GroqVoice](https://github.com/abirzgals/GroqVoice) — menu bar утилита для голосовой диктовки и voice-driven LLM-задач через [Groq](https://groq.com).
+Menu-bar наговаривалка для Mac: **удерживаешь Fn (🌐), говоришь, отпускаешь** — текст
+вставляется в активное окно. Распознавание идёт **на самом Маке** (NVIDIA Parakeet TDT v3
+через [FluidAudio](https://github.com/FluidInference/FluidAudio), CoreML / Neural Engine):
+без аккаунтов, без сети, ~0.2 с на фразу. Groq (Whisper + Llama) остаётся опцией — как
+облачный движок, фолбэк и мозг для task-режима.
 
-**Удерживай Fn (🌐), говори, отпусти** — речь транскрибируется (Whisper) и вставляется в активное окно. Начни фразу с `task` / `задача` / `задание` — транскрипт уйдёт в Llama 3.3 70B, и вставится ответ модели.
+Swift + AppKit, macOS 14+, Apple Silicon.
 
-Swift + AppKit, без зависимостей. Бинарник ~300 KB.
-
-## Установка (готовый билд)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/abirzgals/GroqVoice/main/macos/install.sh | bash
-```
-
-Скачивает [GroqVoice-mac.zip](https://github.com/abirzgals/GroqVoice/releases/latest/download/GroqVoice-mac.zip) (universal: Apple Silicon + Intel), ставит в /Applications, снимает quarantine и запускает. Дальше только yes/yes на промпты разрешений.
-
-## Сборка из исходников
-
-```bash
-./build-app.sh            # нативная архитектура → GroqVoice.app
-./build-app.sh --zip      # universal (arm64+x86_64) + GroqVoice-mac.zip
-mv GroqVoice.app /Applications/
-open /Applications/GroqVoice.app
-```
-
-Требуется только Xcode Command Line Tools (`xcode-select --install`), macOS 13+.
-
-## Первый запуск
-
-1. **API-ключ** — приложение само попросит; ключ с [console.groq.com](https://console.groq.com) (бесплатный tier достаточен). Хранится в `~/Library/Application Support/GroqVoice/config.json`.
-2. **Accessibility** — System Settings → Privacy & Security → Accessibility → включи GroqVoice. Нужно для глобального перехвата Fn и синтеза Cmd+V.
-3. **Microphone** — разреши при первом запросе.
-4. **Важно:** System Settings → Keyboard → **"Press 🌐 key to" → "Do Nothing"** — иначе двойной тап Fn открывает системную диктовку/эмодзи-пикер.
-
-## Использование
+## Что умеет
 
 | Действие | Что делает |
 |---|---|
-| **Hold Fn**, говори, отпусти | Push-to-talk: STT → paste в активное окно |
-| **Double-tap Fn** | Lock-режим: запись держится; любой следующий тап Fn останавливает |
-| Начни с `task: …` / `задача: …` | LLM-ответ вместо транскрипта |
-| **⌃⌥⌘R** (Control+Option+Command+R) | Старт/стоп записи активного экрана → .mov на Рабочий стол |
-| **Fn + другая клавиша** | OS shortcut работает как обычно; запись отбрасывается |
-| Иконка в menu bar | 🎙 ready → 🔴 recording → 🟠 locked → ⏳ processing |
+| **Hold Fn**, говори, отпусти | Push-to-talk: распознать → вставить в активное окно |
+| **Double-tap Fn** | Lock: запись держится, любой следующий тап останавливает |
+| **Fn + другая клавиша** | OS-шорткат работает как обычно, запись отбрасывается |
+| Начать с `задание: …` / `task: …` | Ответ LLM вместо транскрипта (нужен Groq-ключ или Apple Intelligence) |
+| **Hold клавишу-действие** (Right ⌘, Right ⌥, Right ⌃, Left ⌃, Left ⌥, Left ⌘) | Каждой можно назначить перевод на свой язык или свой промпт («перепиши формально»): сказанное обрабатывается и вставляется. Если в момент нажатия выделен текст, действие применяется к нему (хватит короткого тапа), а сказанное — дополнительная инструкция. Нужна LLM |
+| Сказать «новая строка» / «абзац» / "new line" | Вместо слов вставляется перенос строки / пустая строка |
+| Сказать фразу-сниппет («моя подпись», «реквизиты») | Мгновенно вставляется заготовленный текст, без LLM |
+| **Выделить текст**, hold Fn, сказать «сделай короче» / «переведи на латышский» / «исправь ошибки» | Результат заменяет выделение (нужна LLM; иконка фиолетовая). Просто надиктованный текст тоже заменит выделение |
+| То же на **нередактируемом** тексте (веб-страница, PDF, Finder) | Результат копируется в буфер обмена, в menu bar на 2 с значок буфера. Работает и для обычной диктовки без поля ввода |
+| **Esc** во время записи | Отменить запись (в том числе залоченную) |
 
 Граница «тап»/«hold» — 250 мс (`pttHoldMs`), окно двойного тапа — 400 мс (`doubleTapWindowMs`).
+После отпускания клавиши запись продолжается ещё 250 мс (`releaseTailMs`), чтобы не срезать
+последний слог. Записи короче 0.3 с (`minRecordingSeconds`) и тишина (`silencePeakPercent`)
+отбрасываются молча. Аудиодвижок для выбранного микрофона держится подготовленным, поэтому
+запись стартует практически мгновенно после нажатия.
 
-## Локальный режим (offline)
+Вся индикация — иконка в menu bar: 🎙 ready → 🔴 recording → 🟠 locked → ⏳ processing;
+серый перечёркнутый микрофон = нет разрешения Accessibility, жёлтый треугольник на пару секунд =
+ошибка (подробности в логе). Никаких окон и оверлеев.
 
-Tray → **Local Whisper**:
+### Меню и настройки
 
-- **Off (Groq only)** — всё через облако
-- **Fallback when offline** *(по умолчанию)* — обычно Groq, но если сети нет или все Groq-модели упали по лимитам, транскрипция идёт через локальный Whisper (WhisperKit / CoreML на Neural Engine). Включается только если модель уже скачана — жми **Download local model…** один раз (по умолчанию `large-v3-turbo` quantized, ~626 MB с Hugging Face; имя настраивается через `localWhisperModel`, список — [argmaxinc/whisperkit-coreml](https://huggingface.co/argmaxinc/whisperkit-coreml))
-- **Always local** — без интернета вообще: STT локально, task-режим через встроенную модель Apple Intelligence (macOS 26+, Foundation Models, ноль скачиваний)
+Меню в menu bar — только то, что переключают на ходу: статус хоткеев, **Recent** (клик копирует),
+**Paste Last Again**, **History…**, **Settings…** (⌘,), **Dictionary & Snippets…**, выбор
+микрофона, Open Log, Quit. Движок, хоткей, язык и звук — в Settings.
 
-Модель загружается в память лениво при первом использовании и выгружается после простоя (`localUnloadAfterMinutes`, по умолчанию 10 мин) — память не занята, пока не диктуешь.
+Всё остальное — в окне **Settings** (четыре вкладки, изменения применяются сразу, без OK):
 
-Headless-проверка/предзагрузка: `GroqVoice.app/Contents/MacOS/GroqVoice --download-model`
+- **General** — клавиша push-to-talk (Fn или любой модификатор с обеих сторон; для Fn нужно
+  System Settings → Keyboard → *Press 🌐 key to* → **Do Nothing**; Left ⌘/⌥ участвуют во всех
+  шорткатах: каждый ⌘C коротко запускает и отменяет запись, клик с зажатой клавишей тоже
+  отменяет, но зажатая клавиша во время разговора продиктует — правые клавиши спокойнее);
+  блок *Extra keys*: для каждой свободной клавиши Off / перевод на выбранный язык / свой промпт; микрофон и правило
+  «встроенный микрофон вместо Bluetooth-гарнитуры» (у AirPods микрофон 8–16 кГц, и при его
+  включении у них же портится звук); язык распознавания; способ вставки (⌘V или печать
+  клавишами); умные пробелы и регистр (через Accessibility читается текст вокруг курсора: перед
+  словом добавляется пробел, первая буква понижается, если продолжаем предложение, термины из
+  словаря и аббревиатуры не трогаются); голосовые «новая строка»/«абзац»; восстановление
+  буфера; звук; автозапуск.
+- **Advanced** — тайминги (порог hold, окно двойного тапа, хвост после отпускания, минимальная
+  длина записи, порог тишины), размер истории, хранить last.wav, кнопки Open Log, Open Data
+  Folder, Reset to Defaults.
+- **Recognition** — движок (Parakeet или Whisper via Groq) и фолбэк. Ниже две группы:
+  **Parakeet** (статус/загрузка модели, словарь и кнопка редактирования, выгрузка модели
+  по простою) и **Whisper via Groq** (статус ключа, цепочка моделей).
+  Группа неактивного движка серая.
+- **Groq & LLM** — правка выделенного текста голосом (выделение читается в момент нажатия
+  клавиши: через Accessibility, а где приложение его не отдаёт (Word, VS Code, терминалы,
+  веб-страницы, сообщения в WhatsApp/Telegram) — через синтетический ⌘C с возвратом буфера,
+  который выполняется только после отпускания клавиши, чтобы не мешать шорткатам; у VS Code
+  при пустом выделении ⌘C копирует строку, это распознаётся и игнорируется, а для JetBrains,
+  Sublime и Zed ⌘C-проба отключена; в логе строка `focus: …` показывает, что увидело приложение; LLM сам решает, инструкция это или новый текст на замену); ключ
+  Groq; chat endpoint: Groq или любой OpenAI-совместимый сервер
+  (Base URL, ключ, модели) — например Ollama на этом же Маке; статус бэкенда и Apple
+  Intelligence; чистка транскрипта; ключевые слова task-режима и их позиция; системный
+  промпт task-режима; Edit Snippets.
 
-## Меню (right-click / click иконки)
+Окно **Dictionary & Snippets** — две вкладки-таблицы поверх тех же файлов (комментарии и
+порядок в файлах сохраняются): **Vocabulary** (как пишется / как слышится) и **Snippets**
+(что сказать / что вставить, многострочный текст, галка «инструкция для LLM»). Быстрый путь:
+пункт меню **Add Vocabulary Term…** с двумя полями, он же есть в окне History.
 
-Set API Key, Open Config / Vocabulary / Snippets / Log, **Language** (Auto-detect по умолчанию или фиксированный язык распознавания — действует и на Groq, и на локальный Whisper), Local Whisper, Launch at Login, Quit.
+Окно **History** — все диктовки с поиском; Copy, «Paste into Last App» (окно скрывается,
+фокус возвращается в приложение, откуда пришли, текст вставляется туда), двойной клик тоже
+вставляет; Clear History.
+
+Права доступа: если хоткей не работает, в меню вместо «Hold Fn to talk» будет
+«Hotkey inactive — permission missing» и пункт *Enable Accessibility for GroqVoice…*.
+
+## Сборка и установка
+
+```bash
+cd macos
+./build-app.sh            # нативная сборка → GroqVoice.app (ad-hoc подпись)
+./build-app.sh --universal
+./build-app.sh --dist     # Developer ID + нотаризация → zip и dmg
+ditto GroqVoice.app /Applications/GroqVoice.app
+open /Applications/GroqVoice.app
+```
+
+Нужны только Xcode Command Line Tools. Первая сборка тянет FluidAudio (~1–2 мин). Иконка
+приложения рисуется скриптом `Resources/make-icns.sh` (AppKit + SF Symbol) и кладётся в бандл
+сборочным скриптом. Юнит-тесты (словарь, task-режим, WAV, миграция конфига): `./test.sh` —
+обёртка над `swift test`, которая на чистых Command Line Tools подсовывает Swift Testing.
+
+**Первый запуск.** Разреши Microphone и Accessibility (промпты откроются сами; Accessibility
+нужна для глобального хоткея и синтеза ⌘V). Приложение предложит скачать модель Parakeet
+(~500 МБ, один раз). Groq-ключ не обязателен.
+
+**Если хоткей не реагирует** — в меню пункт *Enable Accessibility for GroqVoice…* открывает
+нужную панель System Settings. Включи GroqVoice в списке; приложение подхватит разрешение
+само в течение пары секунд. Если тумблер уже включён, а статус не меняется — удали GroqVoice
+из списка кнопкой «−», добавь заново и нажми *Relaunch GroqVoice*.
+
+**Про подпись.** Без Developer ID сборка подписывается ad-hoc. По умолчанию designated
+requirement у такой подписи — `cdhash` бинарника, и каждая пересборка сбрасывала бы доверие
+в Accessibility (тумблер при этом выглядит включённым). `build-app.sh` поэтому подписывает с
+requirement `identifier "com.abirzgals.groqvoice"`, который не зависит от содержимого
+бинарника — разрешение переживает пересборки. Если доверие всё же слетело:
+
+```bash
+tccutil reset Accessibility com.abirzgals.groqvoice   # снять старую запись
+open /Applications/GroqVoice.app                      # приложение запросит доступ заново
+```
+
+## Движки
+
+**Parakeet TDT 0.6B v3** (по умолчанию). 25 европейских языков (RU, EN, LV, UK, PL, DE…),
+пунктуация и регистр из коробки, числа нормализуются («в 10 утра»). Модель качается с
+Hugging Face в `~/Library/Application Support/GroqVoice/models/`, компилируется CoreML при первом
+запуске (десятки секунд, один раз) и дальше держится в памяти тёплой — каждая фраза
+распознаётся за доли секунды. Слабое место — англицизмы внутри русской фразы: «Coolify»
+становится «кулифай», «Docker» — «декер». Лечится словарём (ниже).
+
+**Whisper via Groq.** Лучше держит смешанную RU/EN речь и биасится словарём напрямую
+(параметр `prompt`), но нужен ключ, сеть и лимиты API. Списки моделей — в Settings
+(приоритет с автоматическим фолбэком при 404/429).
+
+## Словарь
+
+У Parakeet нет параметра `prompt`, как у Whisper, поэтому словарь работает заменой в тексте
+(акустический CTC-бустинг FluidAudio пробовали и убрали: на русской речи он давал ложные замены).
+
+1. **Алиасы → замена в тексте.** Строка `Coolify: кулифай, кулифи` заменяет в транскрипте
+   любое из этих слов (целиком, без учёта регистра) на `Coolify`. Кириллические алиасы от
+   пяти букв ловят и падежные окончания до трёх букв: «в телеграмме» → «в Telegram»,
+   «на гитхабе» → «на GitHub». Детерминированно, мгновенно,
+   работает для обоих движков. Просто пиши в алиасы то, что распознаватель реально выдаёт
+   (смотри `STT result` в логе). Файл создаётся со стартовым набором (~60 терминов: свои
+   проекты, хостинг и деплой, git, стек, сервисы, устройства) — шаблон в
+   `DefaultVocabulary.swift`, дополняй по образцу.
+
+Проверено на синтетической фразе «Нужно задеплоить на Coolify новый билд, проверить логи в
+Docker и написать клиенту в Telegram»: без словаря — «кулифай», «декер», «Телеграм»; с
+алиасами — все три названия правильные, русская и английская контрольные фразы не изменились.
+
+Для Groq-движка канонические термины дополнительно уходят в `prompt` Whisper, а
+*Clean Up Transcript with LLM* получает их как предпочтительные написания.
+
+## LLM: перевод, task-режим, чистка
+
+Все три функции ходят в один chat endpoint (Settings → Groq & LLM). Варианты:
+
+- **Groq** (по умолчанию): самый быстрый, бесплатный tier достаточен. Модели по приоритету:
+  `qwen/qwen3.8-27b` → `openai/gpt-oss-120b` → `openai/gpt-oss-20b` (список на 2026-09-03;
+  Llama 3.x из Groq ушли). Qwen первой не случайно: на бесплатном тарифе лимит 8000 токенов
+  в минуту и 1000 запросов в день на модель, а gpt-oss тратит 300–400 токенов на предложение
+  из-за скрытых рассуждений против 130 у Qwen, и отвечает в 2.5 раза дольше. Для gpt-oss
+  приложение включает `reasoning_effort: low`. При 404/429 берётся следующая модель, список
+  правится в Settings.
+- **Свой OpenAI-совместимый сервер**: Ollama или LM Studio на этом же Маке (например
+  `http://localhost:11434/v1`, модель `qwen3:8b`, без ключа), OpenAI, OpenRouter, Mistral и
+  т.д. Локальная модель 8B занимает 5–6 ГБ памяти пока загружена, батарею тратит только в
+  момент генерации (секунда-две на фразу); Ollama сам выгружает её после простоя.
+- **Apple Intelligence** (macOS 26, Foundation Models): встроенная модель ~3B, ничего не
+  качается, не расходует память приложения, используется автоматически как фолбэк, когда
+  доступна. Требует включённого Apple Intelligence в System Settings; официально русский не
+  входит в список её языков, для RU→EN перевода качество ниже облачных.
 
 ## Файлы
 
-Всё в `~/Library/Application Support/GroqVoice/`:
+`~/Library/Application Support/GroqVoice/`:
 
-- `config.json` — настройки (те же поля, что в Windows-версии: `taskKeywords`, `language`, `minRecordingSeconds`, `silencePeakPercent`, `taskSystemPrompt`, …)
+- `config.json` — все настройки (см. поля в `Config.swift`); меню пишет туда же.
+- `vocabulary.txt` — термины и имена, по строке, с алиасами: `Coolify: кулифай, кулифи`.
+  См. раздел «Словарь».
+- `snippets.txt` — сниппеты: `фраза = текст` (сказал фразу целиком → вставился текст, `\n` —
+  перенос строки) и `фраза => инструкция` (для LLM в task-режиме).
+- `history.jsonl` — последние 50 диктовок (меню Recent); для перевода/правки/task хранится и оригинал
+  (History → Copy Original).
+- `log.txt` — лог с ротацией на 1 МБ.
+- `last.wav` — последняя запись (`"saveLastWav": false` чтобы не писать).
+- `models/` — модель Parakeet.
 
-  Вместо одиночных `transcriptionModel`/`chatModel` здесь **списки моделей по приоритету** с автоматическим fallback при rate limit (429): модель получает cooldown из `retry-after`, запрос уходит в следующую; когда cooldown истекает — снова пробуется более сильная.
+## Отладка
 
-  ```json
-  "transcriptionModels": ["whisper-large-v3", "whisper-large-v3-turbo"],
-  "chatModels": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"]
-  ```
-- `vocabulary.txt` — словарь редких слов/имён для биаса Whisper, hot-reload по mtime, лимит ~700 символов
-- `snippets.txt` — голосовые шорткаты для task-режима (`команда = текст или инструкция`). Говоришь «задание напиши мою рабочую почту» — вставляется значение из таблички; матчинг фаззи (делает LLM), правая часть может быть и инструкцией («переведи = переведи на английский, выведи только перевод»). Hot-reload, открывается через Tray → Open Snippets
-- `log.txt` — лог с ротацией на 1 MB
-- `last.wav` — последняя запись для отладки (`"saveLastWav": false` чтобы отключить)
+```bash
+GroqVoice.app/Contents/MacOS/GroqVoice --download-model      # скачать/прогреть модель, распознать last.wav
+GroqVoice.app/Contents/MacOS/GroqVoice --transcribe file.wav [--vocab terms.txt]  # распознать 16 kHz mono WAV локально
+GroqVoice.app/Contents/MacOS/GroqVoice --snapshot-ui out/   # отрисовать Settings и History в PNG и выйти
+# что приложение отдаёт Accessibility про поле в фокусе (нужен TCC-грант самого GroqVoice, поэтому через open):
+open -n -W -o out.txt GroqVoice.app --args --probe-ax com.anthropic.claudefordesktop [--manual]
+```
 
-## Отличия от Windows-версии
+В логе у каждой строки миллисекунды, а у каждого дубля — разбивка задержки по этапам:
+`take: key released → delivered in 0.31s (tail 0 · stop 14 · probe 2 · stt 121 · context 6 · paste 9 ms)`.
 
-- Хоткей: **Fn** вместо Win+Ctrl (настроено под macOS-привычку — как push-to-talk в системной диктовке)
-- Микрофон: системный default (выбирается в System Settings → Sound → Input)
-- Snipping-режим (Win+Ctrl+Alt) не портирован — на Mac есть встроенный Cmd+Shift+4
-- Autostart через `SMAppService` (Login Items) вместо реестра
+## Архитектура
+
+| Файл | Что делает |
+|---|---|
+| `AppController.swift` | пайплайн запись → STT → LLM → paste, роутинг движков, иконка в menu bar |
+| `PushToTalk.swift` | правила клавиши (hold / tap / double-tap lock / chord) как чистая стейт-машина: события → команды |
+| `TakePlan.swift` | что делать с распознанным: сниппет, правка выделения, действие клавиши, task, clean-up — без сети и UI, покрыто тестами |
+| `AppController+Menu.swift` | меню (строится при каждом открытии) и его действия |
+| `SettingsWindow.swift` | окно Settings (четыре вкладки, live-apply) и главное меню для ⌘C/⌘V в полях |
+| `HistoryWindow.swift` | окно History: поиск, копирование, вставка в предыдущее приложение |
+| `DictionaryWindow.swift` | окно Dictionary & Snippets, диалог быстрого добавления термина |
+| `HotkeyMonitor.swift` | listen-only CGEventTap на несколько клавиш, `HotkeyKey` (Fn / Right ⌘ / …) |
+| `Recorder.swift` | AVAudioEngine → 16 kHz mono Int16 в памяти, выбор устройства |
+| `AudioDevices.swift` | CoreAudio: список входов, default, UID → ID |
+| `LocalSTT.swift` | Parakeet v3 через FluidAudio: загрузка, прогрев, распознавание |
+| `GroqClient.swift` / `ModelChain.swift` | Groq STT + chat с фолбэком по моделям и cooldown |
+| `Paster.swift` | ⌘V с полным восстановлением буфера или посимвольная печать |
+| `TextInsertion.swift` | Accessibility: поле в фокусе, выделение, контекст курсора (умные пробелы/регистр), `AXManualAccessibility` для Electron; голосовые переносы строк |
+| `History.swift` | history.jsonl + меню Recent |
+| `TaskRouter.swift` | детект task-режима, системные промпты (task, clean-up) |
+| `LocalLLM.swift` | Apple Foundation Models (macOS 26) как офлайн-LLM |
+| `Vocabulary.swift` | словарь: термины, алиасы → замена, prompt для Whisper |
+| `Snippets.swift` | сниппеты: мгновенное раскрытие фразы, описание для LLM |
+| `LineFile.swift` | общий для словаря и сниппетов файл «запись на строку»: hot-reload по mtime, правки не трогают комментарии |
+| `Config.swift` | config.json: синтезированный Codable, чтение поверх дефолтов (битое значение стоит только своего ключа) |
 
 ## Privacy
 
-Как в оригинале: ключ только локально, аудио уходит только в `api.groq.com`, никакой телеметрии.
+Аудио не покидает Мак, пока движок — Parakeet. С Groq-движком (или фолбэком, или task-режимом,
+или LLM-чисткой) данные уходят только на `api.groq.com`. Ключ хранится локально, папка данных
+закрыта правами `0700` (в логе и истории лежит всё надиктованное). Телеметрии нет.
 
 ## License
 
