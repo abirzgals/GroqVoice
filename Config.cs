@@ -7,11 +7,26 @@ public sealed class Config
 {
     [JsonPropertyName("groqApiKey")] public string GroqApiKey { get; set; } = "";
     [JsonPropertyName("transcriptionModel")] public string TranscriptionModel { get; set; } = "whisper-large-v3";
-    // Checked against the live Groq API on 2026-09-20: the Llama 3.x models this
-    // app shipped with have been retired. Qwen goes first — on a one-sentence
-    // rewrite it answers in a fraction of the tokens the gpt-oss models spend on
-    // hidden reasoning, and the free tier meters tokens per minute.
-    [JsonPropertyName("chatModel")] public string ChatModel { get; set; } = "qwen/qwen3.8-27b";
+    // Priority order, strongest-for-the-money first: a model that refuses (rate
+    // limit, retired, overloaded) hands the job to the next one. Checked against
+    // the live Groq API on 2026-09-21 — the Llama 3.x models this app shipped with
+    // are gone. Qwen leads because on a one-sentence rewrite it answers in a
+    // fraction of the tokens the gpt-oss models spend on hidden reasoning, and the
+    // free tier meters tokens per minute.
+    [JsonPropertyName("chatModels")] public string[] ChatModels { get; set; } = Array.Empty<string>();
+
+    /// <summary>The shipped chain, used when the config names none that still exist.</summary>
+    public static readonly string[] DefaultChatModels =
+        { "qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b" };
+
+    // Legacy single-model key from older configs; folded into ChatModels on load.
+    [JsonPropertyName("chatModel")] public string ChatModel { get; set; } = "";
+
+    // Send plain dictation through the LLM to fix punctuation, capitals and
+    // recognition slips — never to answer it. Off by default: it costs a round
+    // trip and sends the text to the cloud, which the on-device engine avoids.
+    // Skipped silently whenever no model can be reached.
+    [JsonPropertyName("cleanupTranscript")] public bool CleanupTranscript { get; set; } = false;
 
     // Which engine transcribes: "groq" (Whisper in the cloud, the default this
     // app shipped with) or "parakeet" (NVIDIA Parakeet TDT v3 on this machine —
@@ -162,17 +177,36 @@ public sealed class Config
     /// </summary>
     private void MigrateRetiredModels()
     {
-        if (ChatModel.StartsWith("llama-3.", StringComparison.OrdinalIgnoreCase) ||
-            ChatModel.StartsWith("llama3", StringComparison.OrdinalIgnoreCase) ||
-            ChatModel.StartsWith("mixtral", StringComparison.OrdinalIgnoreCase))
-        {
-            var old = ChatModel;
-            ChatModel = new Config().ChatModel;
-            Log.Warn($"chatModel \"{old}\" is retired on Groq — using \"{ChatModel}\". " +
-                     "Change it in Settings if you prefer another.");
-            Save();
-        }
+        var before = string.Join(",", ChatModels);
+        var chain = ChatModels.ToList();
+
+        // An older config named one model; keep it at the head of the chain — unless
+        // it is one of the ids Groq has retired — and give it the shipped fallbacks.
+        if (chain.Count == 0 && !string.IsNullOrWhiteSpace(ChatModel)) chain.Add(ChatModel);
+        ChatModel = "";
+
+        int had = chain.Count;
+        chain.RemoveAll(IsRetired);
+        foreach (var m in DefaultChatModels)
+            if (!chain.Contains(m, StringComparer.OrdinalIgnoreCase)) chain.Add(m);
+
+        ChatModels = chain.ToArray();
+        if (string.Join(",", ChatModels) == before) return;
+
+        if (had > chain.Count)
+            Log.Warn($"a chat model in the config is retired on Groq — using {string.Join(", ", ChatModels)}");
+        else
+            Log.Info($"chat models: {string.Join(", ", ChatModels)}");
+        Save();
     }
+
+    /// <summary>Ids Groq has withdrawn; a request naming one is simply refused.</summary>
+    private static bool IsRetired(string model) =>
+        model.StartsWith("llama-3.", StringComparison.OrdinalIgnoreCase) ||
+        model.StartsWith("llama3", StringComparison.OrdinalIgnoreCase) ||
+        model.StartsWith("llama-2", StringComparison.OrdinalIgnoreCase) ||
+        model.StartsWith("mixtral", StringComparison.OrdinalIgnoreCase) ||
+        model.StartsWith("gemma-7b", StringComparison.OrdinalIgnoreCase);
 
     public void Save()
     {

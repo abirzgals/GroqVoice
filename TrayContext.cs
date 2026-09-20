@@ -755,6 +755,13 @@ public sealed class TrayContext : ApplicationContext
                 else
                 {
                     output = transcript.Trim();
+                    var cleaned = await CleanupAsync(output, ct).ConfigureAwait(false);
+                    if (cleaned != null && cleaned != output)
+                    {
+                        Log.Info($"cleaned: \"{Snip(cleaned)}\"");
+                        source = output;
+                        output = cleaned;
+                    }
                 }
 
                 if (!string.IsNullOrEmpty(output))
@@ -780,6 +787,41 @@ public sealed class TrayContext : ApplicationContext
                 _ui.Post(_ => { _tray.Icon = _idleIcon; _tray.Text = "GroqVoice — ready"; }, null);
             }
         });
+    }
+
+    /// <summary>How long a clean-up may take before the raw transcript is pasted instead.</summary>
+    private const int CleanupTimeoutMs = 4000;
+
+    /// <summary>After a failed clean-up, stop trying for this long.</summary>
+    private static readonly TimeSpan CleanupCooldown = TimeSpan.FromSeconds(60);
+    private DateTime _cleanupBlockedUntil = DateTime.MinValue;
+
+    /// <summary>
+    /// Tidies punctuation and misheard words in plain dictation, when a model can
+    /// be reached. Every failure path returns null, which means "paste what was
+    /// said" — being offline must cost nothing but the clean-up itself, so after
+    /// one failure the next minute of dictation skips the attempt entirely rather
+    /// than waiting on the network again.
+    /// </summary>
+    private async Task<string?> CleanupAsync(string transcript, CancellationToken ct)
+    {
+        if (!_cfg.CleanupTranscript || string.IsNullOrWhiteSpace(_cfg.GroqApiKey)) return null;
+        // One or two words carry no punctuation worth fixing, and a short phrase is
+        // where a model is most tempted to "answer" instead.
+        if (transcript.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 3) return null;
+
+        if (DateTime.UtcNow < _cleanupBlockedUntil)
+        {
+            Log.Info("cleanup skipped: still in cooldown after the last failure");
+            return null;
+        }
+
+        var (vocabulary, _) = Vocabulary.LoadPrompt();
+        var result = await _groq.CleanupAsync(transcript, vocabulary, CleanupTimeoutMs, ct).ConfigureAwait(false);
+        // Back off only when nothing answered; a rejected answer means the network
+        // is fine and the next sentence deserves its own attempt.
+        _cleanupBlockedUntil = result.Reachable ? DateTime.MinValue : DateTime.UtcNow + CleanupCooldown;
+        return result.Text;
     }
 
     /// <summary>

@@ -26,6 +26,27 @@ internal static class Program
 
         if (args.Contains("--selftest-selection")) { Environment.ExitCode = SelfTestSelection(); return; }
 
+        int c = Array.IndexOf(args, "--cleanup");
+        if (c >= 0 && c + 1 < args.Length)
+        {
+            // An optional timeout makes the "no network" path testable: a dead link
+            // reaches the app as a request that never answers in time.
+            int ms = c + 2 < args.Length && int.TryParse(args[c + 2], out var v) ? v : 10000;
+            Environment.ExitCode = Cleanup(args[c + 1], ms);
+            return;
+        }
+
+        int vo = Array.IndexOf(args, "--vocab");
+        if (vo >= 0 && vo + 1 < args.Length)
+        {
+            OpenConsole();
+            Vocabulary.EnsureFileExists();
+            var (_, count) = Vocabulary.LoadPrompt();
+            Console.Out.WriteLine($"[{count} terms from {Vocabulary.Path}]");
+            Console.Out.WriteLine(Vocabulary.ApplyAliases(args[vo + 1]));
+            return;
+        }
+
         int u = Array.IndexOf(args, "--snapshot-ui");
         if (u >= 0) { Environment.ExitCode = SnapshotUi(u + 1 < args.Length ? args[u + 1] : "."); return; }
 
@@ -42,7 +63,9 @@ internal static class Program
 
         Log.Info($"GroqVoice starting. exe={Application.ExecutablePath}");
         var cfg = Config.Load();
-        Log.Info($"config loaded. apiKey={(string.IsNullOrWhiteSpace(cfg.GroqApiKey) ? "MISSING" : "set")} sttModel={cfg.TranscriptionModel} chatModel={cfg.ChatModel}");
+        Log.Info($"config loaded. apiKey={(string.IsNullOrWhiteSpace(cfg.GroqApiKey) ? "MISSING" : "set")} " +
+                 $"engine={cfg.SttEngine} sttModel={cfg.TranscriptionModel} " +
+                 $"chatModels={string.Join(", ", cfg.ChatModels)} cleanup={cfg.CleanupTranscript}");
 
         // The key is only needed for the cloud engine and for task mode. With
         // Parakeet downloaded, dictation works without an account — don't block
@@ -78,7 +101,7 @@ internal static class Program
     /// </summary>
     private static int Transcribe(string wavPath)
     {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        OpenConsole();
         try
         {
             if (!File.Exists(wavPath)) { Console.Error.WriteLine($"no such file: {wavPath}"); return 2; }
@@ -109,7 +132,7 @@ internal static class Program
     /// </summary>
     private static int DownloadModel()
     {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        OpenConsole();
         if (ModelDownload.IsInstalled)
         {
             Console.Out.WriteLine($"already installed: {ModelDownload.ModelDir}");
@@ -146,7 +169,7 @@ internal static class Program
     /// </summary>
     private static int ProbeSelection(int waitSeconds)
     {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        OpenConsole();
         Console.Out.WriteLine($"select some text somewhere — probing in {waitSeconds} s…");
         Console.Out.Flush();
         Thread.Sleep(TimeSpan.FromSeconds(Math.Clamp(waitSeconds, 0, 60)));
@@ -166,7 +189,7 @@ internal static class Program
     /// </summary>
     private static int SelfTestSelection()
     {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        OpenConsole();
         const string Sample = "Selection probe sample — выделенный текст.";
         string? probed = null;
         string? clipboardBefore = Paster.ReadClipboardText();
@@ -201,12 +224,38 @@ internal static class Program
     }
 
     /// <summary>
+    /// `GroqVoice.exe --cleanup "raw transcript"` — runs the tidy-up pass and says
+    /// what it decided. Prints the input again when the pass was skipped or its
+    /// answer was thrown out, which is exactly what would be pasted.
+    /// </summary>
+    private static int Cleanup(string transcript, int timeoutMs)
+    {
+        OpenConsole();
+        try
+        {
+            var cfg = Config.Load();
+            var (vocabulary, _) = Vocabulary.LoadPrompt();
+            var result = new Groq(cfg).CleanupAsync(transcript, vocabulary, timeoutMs).GetAwaiter().GetResult();
+
+            Console.Out.WriteLine(result.Text is null
+                ? $"[kept as spoken; model {(result.Reachable ? "answered but was rejected" : "unreachable")}]\n{transcript}"
+                : result.Text);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    /// <summary>
     /// `GroqVoice.exe --edit "selected text" "what was said"` — runs the editing
     /// stage without a microphone or a selection, to check the prompt and the model.
     /// </summary>
     private static int EditSelection(string selection, string spoken)
     {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        OpenConsole();
         try
         {
             var cfg = Config.Load();
@@ -231,7 +280,7 @@ internal static class Program
     /// </summary>
     private static int SnapshotUi(string dir)
     {
-        AttachConsole(ATTACH_PARENT_PROCESS);
+        OpenConsole();
         try
         {
             ApplicationConfiguration.Initialize();
@@ -277,6 +326,16 @@ internal static class Program
             Console.Out.WriteLine(name);
         }
         form.Hide();
+    }
+
+    /// <summary>
+    /// Attaches to the terminal that launched us and makes it speak UTF-8 — the
+    /// console's default codepage turns dictated Cyrillic into rubble.
+    /// </summary>
+    private static void OpenConsole()
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
     }
 
     private const int ATTACH_PARENT_PROCESS = -1;

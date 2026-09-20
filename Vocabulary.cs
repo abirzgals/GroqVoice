@@ -28,21 +28,28 @@ public static class Vocabulary
     private static int _cachedCount = 0;
     private static List<(Regex rx, string term)> _cachedMatchers = new();
 
+    /// <summary>
+    /// Creates vocabulary.txt with the starter list. An older file that holds only
+    /// comments — the header this app used to write — is replaced by it too: it
+    /// carries nothing to lose, and without entries the English terms in Russian
+    /// speech keep coming back spelled in Cyrillic.
+    /// </summary>
     public static void EnsureFileExists()
     {
-        if (File.Exists(Path)) return;
         Directory.CreateDirectory(Config.Dir);
-        File.WriteAllText(Path,
-            "# GroqVoice vocabulary — biases Whisper toward task-specific words.\n" +
-            "# One word or short phrase per line. Capitalisation matters.\n" +
-            "# Lines starting with '#' are ignored. Hot-reloads — no restart needed.\n" +
-            "#\n" +
-            "# Examples:\n" +
-            "# OAuth\n" +
-            "# gRPC\n" +
-            "# Postgres\n" +
-            "# Kubernetes\n" +
-            "# WebSocket\n");
+        if (!File.Exists(Path))
+        {
+            File.WriteAllText(Path, DefaultVocabulary.Text);
+            Log.Info($"vocabulary: starter list written to {Path}");
+            return;
+        }
+
+        bool hasEntries = File.ReadLines(Path)
+            .Any(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#'));
+        if (hasEntries) return;
+
+        File.WriteAllText(Path, DefaultVocabulary.Text);
+        Log.Info("vocabulary: file held no terms — replaced with the starter list");
     }
 
     /// <summary>Returns the prompt string and the number of vocabulary entries used.</summary>

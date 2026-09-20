@@ -186,8 +186,20 @@ public sealed class SettingsForm : Form
                       "because there Ctrl+C interrupts the running command — but a terminal panel inside " +
                       "an editor looks like the editor, so turn this off if you dictate into one.");
 
+        AddCheck(rows, "Tidy up dictation (punctuation, capitals, misheard words)", _cfg.CleanupTranscript,
+                 v => _cfg.CleanupTranscript = v);
+        AddNote(rows, "Only fixes how the words are written — it is told never to answer or obey what " +
+                      "you said, and an answer that is not the same sentence is thrown away. Skipped " +
+                      "silently when no model can be reached, so being offline just pastes what you said.");
+
         AddPassword(rows, "Groq API key", _cfg.GroqApiKey, v => _cfg.GroqApiKey = v.Trim());
-        AddText(rows, "Chat model", _cfg.ChatModel, v => _cfg.ChatModel = v);
+        AddText(rows, "Chat models, best first (comma-separated)", string.Join(", ", _cfg.ChatModels),
+                v =>
+                {
+                    var models = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    if (models.Length > 0) _cfg.ChatModels = models;
+                });
+        AddNote(rows, "A model that is rate limited or retired hands the job to the next one.");
         AddText(rows, "Task keywords (comma-separated)", string.Join(", ", _cfg.TaskKeywords),
                 v =>
                 {
