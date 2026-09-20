@@ -11,6 +11,7 @@ internal static class Program
         // Runs before the single-instance mutex so it works while the tray app is up.
         int t = Array.IndexOf(args, "--transcribe");
         if (t >= 0 && t + 1 < args.Length) { Environment.ExitCode = Transcribe(args[t + 1]); return; }
+        if (args.Contains("--download-model")) { Environment.ExitCode = DownloadModel(); return; }
 
         using var mutex = new Mutex(initiallyOwned: true, name: "Global\\GroqVoice.SingleInstance", out bool created);
         if (!created) { Log.Info("another instance already running, exiting"); return; }
@@ -81,6 +82,43 @@ internal static class Program
         {
             Log.Error("--transcribe failed", ex);
             Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// `GroqVoice.exe --download-model` — fetches the local model from a terminal,
+    /// printing percentages. The tray menu does the same thing in a window; this is
+    /// for scripted installs and for checking the download without the UI.
+    /// </summary>
+    private static int DownloadModel()
+    {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        if (ModelDownload.IsInstalled)
+        {
+            Console.Out.WriteLine($"already installed: {ModelDownload.ModelDir}");
+            return 0;
+        }
+        try
+        {
+            int last = -1;
+            var progress = new Progress<ModelDownload.Progress>(p =>
+            {
+                if (p.Extracting) { Console.Out.WriteLine("\nunpacking…"); return; }
+                int percent = (int)(p.Fraction * 100);
+                if (percent == last) return;
+                last = percent;
+                Console.Out.Write($"\rdownloading {percent,3}%  ({p.BytesDone / 1048576} / {p.BytesTotal / 1048576} MB)");
+                Console.Out.Flush();
+            });
+            ModelDownload.InstallAsync(progress, CancellationToken.None).GetAwaiter().GetResult();
+            Console.Out.WriteLine($"\nready: {ModelDownload.ModelDir}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("--download-model failed", ex);
+            Console.Error.WriteLine($"\n{ex.Message}");
             return 1;
         }
     }
